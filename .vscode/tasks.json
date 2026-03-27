@@ -1,0 +1,42 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "LMMB: Start Full Dev Stack",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/start-dev-stack.ps1"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "LMMB: Start Stack (No Stripe)",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/start-dev-stack.ps1",
+        "-NoStripe"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "LMMB: Stop Full Dev Stack",
+      "type": "shell",
+      "command": "powershell",
+      "args": [
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}/scripts/stop-dev-stack.ps1"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}

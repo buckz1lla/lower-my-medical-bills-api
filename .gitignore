@@ -3,6 +3,17 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Runtime state
+data/payment_state.json
+data/*.jsonl
+analytics/
+tmp-test-eob.csv
+
 # C extensions
 *.so
 
