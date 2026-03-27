@@ -44,6 +44,12 @@ class SavingsOpportunity(BaseModel):
     recommended_action: str
     difficulty_level: str  # "easy", "medium", "hard"
     time_estimate_days: int
+    confidence_score: float  # 0-1 confidence this is actionable
+    confidence_level: str  # "high", "medium", "low"
+    flag_reason: str
+    verification_steps: List[str]
+    could_be_correct_if: List[str]
+    missing_data_points: List[str]
 
 class AppealRecommendation(BaseModel):
     """Recommendation for appealing a claim"""
