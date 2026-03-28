@@ -353,16 +353,42 @@ def _extract_total_row_amounts(text: str) -> List[float]:
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     money_pattern = r"\$?\d{1,3}(?:,\d{3})*\.\d{2}|\$?\d+\.\d{2}"
+    candidates: List[List[float]] = []
+
+    def _normalize_label(value: str) -> str:
+        return re.sub(r"[^a-z]+", " ", value.lower()).strip()
 
     for idx, line in enumerate(lines):
-        if "total amount" not in line.lower():
+        label_window = " ".join(lines[idx: min(idx + 3, len(lines))])
+        label_norm = _normalize_label(label_window)
+        has_total_amount_label = bool(
+            re.search(r"\btotal\b", label_norm) and re.search(r"\bamount\b", label_norm)
+        )
+
+        if not has_total_amount_label:
             continue
 
-        window = " ".join(lines[idx: min(idx + 2, len(lines))])
+        # Columns in PDF text can wrap across lines, so read a larger local window.
+        window = " ".join(lines[idx: min(idx + 5, len(lines))])
         values = [_to_float(value) for value in re.findall(money_pattern, window)]
         values = [v for v in values if v >= 0]
         if len(values) >= 2:
-            return values
+            candidates.append(values)
+
+    if not candidates:
+        # Fallback: pick a late table row with many money columns (typical total row pattern).
+        for idx, line in enumerate(lines):
+            if idx < len(lines) // 2:
+                continue
+            values = [_to_float(value) for value in re.findall(money_pattern, line)]
+            values = [v for v in values if v >= 0]
+            if len(values) >= 6:
+                candidates.append(values)
+
+    if candidates:
+        # Prefer row with most numeric columns, then larger billed total.
+        candidates.sort(key=lambda row: (len(row), row[0] if row else 0.0), reverse=True)
+        return candidates[0]
 
     return []
 
@@ -392,7 +418,7 @@ def _parse_text_claim(text: str, file_name: str, analysis_id: str):
             total_billed = total_row_values[0]
             plan_allowed = total_row_values[2]
             insurance_paid = total_row_values[3] if len(total_row_values) >= 4 else insurance_paid
-            patient_resp = total_row_values[-1]
+            patient_resp = next((value for value in reversed(total_row_values) if value > 0), 0.0)
             if patient_resp == 0 and len(total_row_values) >= 5:
                 patient_resp = total_row_values[4]
         else:
