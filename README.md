@@ -60,3 +60,31 @@ Use `Terminal -> Run Task` and choose one of:
 - `LMMB: Start Full Dev Stack`
 - `LMMB: Start Stack (No Stripe)`
 - `LMMB: Stop Full Dev Stack`
+
+## Benchmark release gate
+
+Run benchmarks and enforce release thresholds before shipping parser/rule changes.
+
+Default thresholds:
+
+- raw score >= 95%
+- weighted score >= 97%
+- 0 failing benchmark cases
+
+PowerShell helper:
+
+```powershell
+scripts\run-release-gate.ps1
+```
+
+Python direct:
+
+```powershell
+venv\Scripts\python scripts\run_release_gate.py
+```
+
+Override thresholds:
+
+```powershell
+venv\Scripts\python scripts\run_release_gate.py --raw-threshold 96 --weighted-threshold 98 --allow-case-failures 0
+```
