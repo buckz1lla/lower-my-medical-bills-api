@@ -1,0 +1,17 @@
+{
+  "id": "high_amount_in_network_no_false_oon",
+  "description": "High in-network liability should not create out_of_network rule hits by itself.",
+  "weight": 1.5,
+  "input": {
+    "file_name": "high-in-network.pdf",
+    "file_type": ".pdf",
+    "text": "Provider: METRO HEALTH\nStatus: Network\nProvider billed $1600.00\nPlan allowed amount $900.00\nYour plan paid $0.00\nAmount you owe $900.00\n"
+  },
+  "expect": {
+    "min_claims": 1,
+    "parser_source_in": ["text_heuristic", "csv_structured"],
+    "max_opportunities_by_type": {
+      "out_of_network": 0
+    }
+  }
+}

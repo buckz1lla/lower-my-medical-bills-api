@@ -1,0 +1,18 @@
+{
+  "id": "network_with_denied_and_oon_text",
+  "description": "Mixed wording with denied status and out-of-network should trigger both appeal and OON opportunities when thresholds are met.",
+  "weight": 1.7,
+  "input": {
+    "file_name": "mixed-case.pdf",
+    "file_type": ".pdf",
+    "text": "Provider: AFTER HOURS CLINIC\nStatus: Out-of-Network\nProvider billed $480.00\nPlan allowed amount $140.00\nYour plan paid $0.00\nAmount you owe $140.00\nClaim status denied\n"
+  },
+  "expect": {
+    "min_claims": 1,
+    "parser_source_in": ["text_heuristic", "csv_structured"],
+    "min_opportunities_by_type": {
+      "out_of_network": 1,
+      "appeal": 1
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "id": "denied_small_amount_no_appeal",
+  "description": "Denied amount below threshold should not trigger appeal rule.",
+  "weight": 1.0,
+  "input": {
+    "file_name": "small-denied.csv",
+    "file_type": ".csv",
+    "text": "claim_id,visit_date,provider_name,service_description,billed_amount,allowed_amount,patient_responsibility,insurance_paid,status,in_network\nCLM-SMALL-01,2026-03-10,Clinic A,Lab Test,95.00,40.00,40.00,0.00,denied,true\n"
+  },
+  "expect": {
+    "parser_source_equals": "csv_structured",
+    "min_opportunities_by_type": {
+      "appeal": 0
+    }
+  }
+}

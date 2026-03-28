@@ -1,0 +1,17 @@
+{
+  "id": "amount_you_owe_star_variant",
+  "description": "Parser should correctly read 'Amount you owe*' wording.",
+  "weight": 1.2,
+  "input": {
+    "file_name": "EOB-star.pdf",
+    "file_type": ".pdf",
+    "text": "Provider: T BULLARD\nStatus: Network\nProvider billed $822.00\nAmount saved $526.34\nPlan allowed amount $295.66\nYour plan paid $0.00\nAmount you owe* $295.66\n"
+  },
+  "expect": {
+    "min_total_billed": 821.0,
+    "max_total_billed": 823.0,
+    "min_patient_responsibility": 295.0,
+    "max_patient_responsibility": 296.0,
+    "parser_source_in": ["text_heuristic", "csv_structured"]
+  }
+}

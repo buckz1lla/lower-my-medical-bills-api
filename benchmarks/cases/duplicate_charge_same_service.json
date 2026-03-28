@@ -1,0 +1,17 @@
+{
+  "id": "duplicate_charge_same_service",
+  "description": "CSV rows with duplicated service description on same date should trigger duplicate-charge rule.",
+  "weight": 1.6,
+  "input": {
+    "file_name": "duplicate.csv",
+    "file_type": ".csv",
+    "text": "claim_id,visit_date,provider_name,service_description,billed_amount,allowed_amount,patient_responsibility,insurance_paid,status,in_network\nCLM-DUP-01,2026-01-10,City Hospital,Chest X-Ray,300.00,120.00,30.00,90.00,paid,true\nCLM-DUP-02,2026-01-10,City Hospital,Chest X-Ray,300.00,120.00,30.00,90.00,paid,true\n"
+  },
+  "expect": {
+    "min_claims": 2,
+    "parser_source_equals": "csv_structured",
+    "min_opportunities_by_type": {
+      "billing_error": 1
+    }
+  }
+}

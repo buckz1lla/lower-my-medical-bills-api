@@ -1,0 +1,16 @@
+{
+  "id": "csv_two_rows_non_duplicate",
+  "description": "Two distinct services on same date should not be flagged as duplicate billing.",
+  "weight": 1.2,
+  "input": {
+    "file_name": "two-services.csv",
+    "file_type": ".csv",
+    "text": "claim_id,visit_date,provider_name,service_description,billed_amount,allowed_amount,patient_responsibility,insurance_paid,status,in_network\nCLM-TWO-01,2026-01-12,City Hospital,Chest X-Ray,300.00,120.00,30.00,90.00,paid,true\nCLM-TWO-02,2026-01-12,City Hospital,Office Visit,200.00,100.00,20.00,80.00,paid,true\n"
+  },
+  "expect": {
+    "parser_source_equals": "csv_structured",
+    "max_opportunities_by_type": {
+      "billing_error": 0
+    }
+  }
+}

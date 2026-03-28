@@ -1,0 +1,18 @@
+{
+  "id": "unparsed_placeholder_guard",
+  "description": "Unreadable payload should return placeholder and never inject demo claims.",
+  "weight": 1.8,
+  "input": {
+    "file_name": "blob.pdf",
+    "file_type": ".pdf",
+    "text": ""
+  },
+  "expect": {
+    "max_claims": 1,
+    "parser_source_equals": "unparsed_placeholder",
+    "min_total_billed": 0.0,
+    "max_total_billed": 0.0,
+    "min_patient_responsibility": 0.0,
+    "max_patient_responsibility": 0.0
+  }
+}

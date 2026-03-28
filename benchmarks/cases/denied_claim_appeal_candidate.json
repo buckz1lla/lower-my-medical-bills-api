@@ -1,0 +1,17 @@
+{
+  "id": "denied_claim_appeal_candidate",
+  "description": "Denied in-network claim should generate appeal opportunity.",
+  "weight": 1.4,
+  "input": {
+    "file_name": "Denied-EOB.pdf",
+    "file_type": ".pdf",
+    "text": "Provider: GENERAL CLINIC\nStatus: Network\nService OFFICE VISIT\nProvider billed $420.00\nPlan allowed amount $120.00\nYour plan paid $0.00\nAmount you owe $120.00\nClaim status denied\n"
+  },
+  "expect": {
+    "min_claims": 1,
+    "parser_source_in": ["text_heuristic", "csv_structured"],
+    "min_opportunities_by_type": {
+      "appeal": 1
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "csv_structured_totals",
+  "description": "Structured CSV should preserve billed and responsibility totals from the single row.",
+  "weight": 1.1,
+  "input": {
+    "file_name": "single-row.csv",
+    "file_type": ".csv",
+    "text": "claim_id,visit_date,provider_name,service_description,billed_amount,allowed_amount,patient_responsibility,insurance_paid,status,in_network\nCLM-CSV-01,2026-02-14,ABC Pediatrics,Well Visit,210.00,150.00,60.00,90.00,paid,true\n"
+  },
+  "expect": {
+    "parser_source_equals": "csv_structured",
+    "min_total_billed": 209.0,
+    "max_total_billed": 211.0,
+    "min_patient_responsibility": 59.0,
+    "max_patient_responsibility": 61.0
+  }
+}

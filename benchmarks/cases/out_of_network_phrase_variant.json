@@ -1,0 +1,17 @@
+{
+  "id": "out_of_network_phrase_variant",
+  "description": "Phrase variant 'out of network' (without hyphen) should still set OON logic path.",
+  "weight": 1.3,
+  "input": {
+    "file_name": "OON-phrase.pdf",
+    "file_type": ".pdf",
+    "text": "Provider: CARE CENTER\nStatus: out of network\nProvider billed $670.00\nPlan allowed amount $250.00\nYour plan paid $0.00\nAmount you owe $250.00\n"
+  },
+  "expect": {
+    "min_claims": 1,
+    "parser_source_in": ["text_heuristic", "csv_structured"],
+    "min_opportunities_by_type": {
+      "out_of_network": 1
+    }
+  }
+}
