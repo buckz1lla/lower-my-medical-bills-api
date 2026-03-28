@@ -209,6 +209,14 @@ def _build_claims_from_uploaded_file(
     """Build claims from uploaded file content using best-effort parsing."""
     claims: List[schemas.ClaimGroup] = []
 
+    # Explicit fast-path: OCR/Excel parsing is not implemented yet, so avoid expensive regex on binary payloads.
+    if file_type in {".jpg", ".jpeg", ".png", ".xlsx"}:
+        return [_build_placeholder_claim(file_name=file_name, analysis_id=analysis_id)], {
+            "analysis_mode": "live",
+            "parser_source": "unparsed_placeholder",
+            "parser_warning": "This file type requires OCR/structured parser support. Try CSV for deterministic extraction.",
+        }
+
     if file_type == ".csv":
         claims = _parse_csv_claims(content)
         if claims:
@@ -218,7 +226,22 @@ def _build_claims_from_uploaded_file(
                 "parser_warning": "",
             }
 
-    text = _decode_text_content(content)
+    # Guard against long-running regex scans on very large binary-heavy files.
+    if len(content) > 5_000_000:
+        return [_build_placeholder_claim(file_name=file_name, analysis_id=analysis_id)], {
+            "analysis_mode": "live",
+            "parser_source": "unparsed_placeholder",
+            "parser_warning": "File too large for current text-heuristic parser. Use smaller PDF or CSV export.",
+        }
+
+    text = _decode_text_content(content, max_bytes=1_000_000)
+    if not _looks_like_text(text):
+        return [_build_placeholder_claim(file_name=file_name, analysis_id=analysis_id)], {
+            "analysis_mode": "live",
+            "parser_source": "unparsed_placeholder",
+            "parser_warning": "Could not extract readable text from this upload yet. OCR support is needed for this format.",
+        }
+
     claim = _parse_text_claim(text=text, file_name=file_name, analysis_id=analysis_id)
     if claim is not None:
         return [claim], {
@@ -234,16 +257,31 @@ def _build_claims_from_uploaded_file(
     }
 
 
-def _decode_text_content(content: bytes) -> str:
+def _decode_text_content(content: bytes, max_bytes: int = 1_000_000) -> str:
+    sample = content[:max_bytes]
     # Try common decoders and keep the first non-empty result.
     for encoding in ("utf-8", "latin-1"):
         try:
-            decoded = content.decode(encoding, errors="ignore")
+            decoded = sample.decode(encoding, errors="ignore")
             if decoded.strip():
                 return decoded
         except Exception:
             continue
     return ""
+
+
+def _looks_like_text(value: str) -> bool:
+    if not value:
+        return False
+    trimmed = value.strip()
+    if len(trimmed) < 20:
+        return False
+
+    printable = sum(1 for ch in trimmed if ch.isprintable())
+    printable_ratio = printable / max(len(trimmed), 1)
+    has_numeric_pattern = bool(re.search(r"\d{1,3}(?:,\d{3})*\.\d{2}|\d{1,2}/\d{1,2}/\d{4}", trimmed))
+    has_eob_keywords = bool(re.search(r"provider|claim|billed|allowed|owe|insurance", trimmed, flags=re.IGNORECASE))
+    return printable_ratio > 0.85 and (has_numeric_pattern or has_eob_keywords)
 
 
 def _to_float(raw: str) -> float:
