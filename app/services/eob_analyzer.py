@@ -3,6 +3,10 @@ from datetime import date, datetime
 from typing import List
 from app import schemas
 import json
+import csv
+import io
+import os
+import re
 
 # Simulated database of common billing errors and patterns
 COMMON_BILLING_ERRORS = {
@@ -44,9 +48,27 @@ async def analyze_eob(
     - Integrate with insurance databases
     """
     
-    # For MVP, generate realistic demo data
-    # In production, parse the actual file
-    claims = _generate_demo_claims()
+    parser_meta = {
+        "analysis_mode": "live",
+        "parser_source": "uploaded_file",
+        "parser_warning": "",
+    }
+
+    # Demo mode is now opt-in only. It should never run silently in production.
+    if os.getenv("ALLOW_DEMO_EOB_DATA", "false").strip().lower() == "true":
+        claims = _generate_demo_claims()
+        parser_meta = {
+            "analysis_mode": "demo",
+            "parser_source": "hardcoded_demo_claims",
+            "parser_warning": "Demo mode is enabled. Results do not reflect uploaded file contents.",
+        }
+    else:
+        claims, parser_meta = _build_claims_from_uploaded_file(
+            file_name=file_name,
+            content=content,
+            file_type=file_type,
+            analysis_id=analysis_id,
+        )
     
     # Analyze claims for opportunities
     savings_opportunities = _identify_savings_opportunities(claims)
@@ -65,7 +87,10 @@ async def analyze_eob(
         "out_of_network_claims": sum(1 for c in claims if not c.in_network),
         "denied_claims": sum(1 for claim in claims for item in claim.line_items if item.status == "denied"),
         "billing_error_ratio": _calculate_error_ratio(claims),
-        "oob_overpayment": _calculate_oob_overpayment(claims)
+        "oob_overpayment": _calculate_oob_overpayment(claims),
+        "analysis_mode": parser_meta.get("analysis_mode", "live"),
+        "parser_source": parser_meta.get("parser_source", "uploaded_file"),
+        "parser_warning": parser_meta.get("parser_warning", ""),
     }
     
     return schemas.EOBAnalysis(
@@ -173,6 +198,230 @@ def _generate_demo_claims() -> List[schemas.ClaimGroup]:
         )
     ]
     return claims
+
+
+def _build_claims_from_uploaded_file(
+    file_name: str,
+    content: bytes,
+    file_type: str,
+    analysis_id: str,
+):
+    """Build claims from uploaded file content using best-effort parsing."""
+    claims: List[schemas.ClaimGroup] = []
+
+    if file_type == ".csv":
+        claims = _parse_csv_claims(content)
+        if claims:
+            return claims, {
+                "analysis_mode": "live",
+                "parser_source": "csv_structured",
+                "parser_warning": "",
+            }
+
+    text = _decode_text_content(content)
+    claim = _parse_text_claim(text=text, file_name=file_name, analysis_id=analysis_id)
+    if claim is not None:
+        return [claim], {
+            "analysis_mode": "live",
+            "parser_source": "text_heuristic",
+            "parser_warning": "Best-effort parsing used. Verify fields against your EOB before acting.",
+        }
+
+    return [_build_placeholder_claim(file_name=file_name, analysis_id=analysis_id)], {
+        "analysis_mode": "live",
+        "parser_source": "unparsed_placeholder",
+        "parser_warning": "Could not reliably parse this file format yet. No synthetic demo claims were injected.",
+    }
+
+
+def _decode_text_content(content: bytes) -> str:
+    # Try common decoders and keep the first non-empty result.
+    for encoding in ("utf-8", "latin-1"):
+        try:
+            decoded = content.decode(encoding, errors="ignore")
+            if decoded.strip():
+                return decoded
+        except Exception:
+            continue
+    return ""
+
+
+def _to_float(raw: str) -> float:
+    cleaned = (raw or "").replace(",", "").replace("$", "").strip()
+    try:
+        return float(cleaned)
+    except Exception:
+        return 0.0
+
+
+def _find_amount_near_keywords(text: str, keywords: List[str]) -> float:
+    if not text:
+        return 0.0
+    money = r"(\$?\d{1,3}(?:,\d{3})*\.\d{2}|\$?\d+\.\d{2})"
+    for keyword in keywords:
+        pattern = rf"{keyword}.{{0,80}}?{money}"
+        match = re.search(pattern, text, flags=re.IGNORECASE | re.DOTALL)
+        if match:
+            return _to_float(match.group(1))
+    return 0.0
+
+
+def _parse_text_claim(text: str, file_name: str, analysis_id: str):
+    if not text or len(text.strip()) < 20:
+        return None
+
+    all_amounts = [
+        _to_float(value)
+        for value in re.findall(r"\$?\d{1,3}(?:,\d{3})*\.\d{2}|\$?\d+\.\d{2}", text)
+    ]
+    all_amounts = [value for value in all_amounts if value > 0]
+
+    total_billed = _find_amount_near_keywords(text, ["total billed", "billed", "amount billed"])
+    plan_allowed = _find_amount_near_keywords(text, ["plan allowed", "allowed amount", "allowed"])
+    insurance_paid = _find_amount_near_keywords(text, ["insurance paid", "your plan paid", "plan paid"])
+    patient_resp = _find_amount_near_keywords(text, ["amount you owe", "you owe", "patient responsibility"])
+
+    if total_billed == 0 and all_amounts:
+        total_billed = max(all_amounts)
+    if patient_resp == 0 and "you owe" in text.lower() and all_amounts:
+        patient_resp = min(all_amounts)
+    if plan_allowed == 0 and total_billed > 0 and patient_resp > 0:
+        plan_allowed = max(0.0, total_billed - patient_resp)
+
+    if total_billed <= 0 and patient_resp <= 0 and insurance_paid <= 0:
+        return None
+
+    provider_match = re.search(r"provider\s*:\s*([^\n\r]+)", text, flags=re.IGNORECASE)
+    provider_name = provider_match.group(1).strip() if provider_match else "Provider from uploaded EOB"
+
+    code_match = re.search(r"claim\s+processing\s+codes?\s*[:\-]?\s*([A-Za-z0-9]{1,10})", text, flags=re.IGNORECASE)
+    reason_code = code_match.group(1).strip() if code_match else None
+
+    date_match = re.search(r"\b(\d{1,2}/\d{1,2}/\d{4})\b", text)
+    visit_date = date.today()
+    if date_match:
+        try:
+            visit_date = datetime.strptime(date_match.group(1), "%m/%d/%Y").date()
+        except Exception:
+            visit_date = date.today()
+
+    in_network = "out-of-network" not in text.lower() and "out of network" not in text.lower()
+    status = "denied" if "denied" in text.lower() else "paid"
+
+    line_item = schemas.LineItem(
+        service_date=visit_date,
+        provider_name=provider_name,
+        service_description="Service line parsed from uploaded EOB",
+        billed_amount=round(total_billed, 2),
+        allowed_amount=round(plan_allowed, 2),
+        patient_responsibility=round(patient_resp, 2),
+        insurance_paid=round(insurance_paid, 2),
+        status=status,
+        reason_code=reason_code,
+    )
+
+    return schemas.ClaimGroup(
+        claim_id=f"CLM-{analysis_id[:8].upper()}",
+        visit_date=visit_date,
+        provider_name=provider_name,
+        facility_name=file_name,
+        line_items=[line_item],
+        in_network=in_network,
+        total_billed=round(total_billed, 2),
+        total_allowed=round(plan_allowed, 2),
+        total_paid_by_insurance=round(insurance_paid, 2),
+        total_patient_responsibility=round(patient_resp, 2),
+    )
+
+
+def _parse_csv_claims(content: bytes) -> List[schemas.ClaimGroup]:
+    claims: List[schemas.ClaimGroup] = []
+    text = _decode_text_content(content)
+    if not text:
+        return claims
+
+    reader = csv.DictReader(io.StringIO(text))
+    rows = list(reader)
+    if not rows:
+        return claims
+
+    for idx, row in enumerate(rows):
+        billed = _to_float(row.get("billed_amount", "0"))
+        allowed = _to_float(row.get("allowed_amount", "0"))
+        patient = _to_float(row.get("patient_responsibility", "0"))
+        insurance = _to_float(row.get("insurance_paid", "0"))
+        if billed <= 0 and allowed <= 0 and patient <= 0 and insurance <= 0:
+            continue
+
+        provider_name = (row.get("provider_name") or "Provider from CSV").strip()
+        description = (row.get("service_description") or "Service from CSV").strip()
+        status = (row.get("status") or "paid").strip().lower()
+        in_network_raw = (row.get("in_network") or "true").strip().lower()
+        in_network = in_network_raw in {"true", "1", "yes", "y"}
+
+        visit_date = date.today()
+        if row.get("visit_date"):
+            try:
+                visit_date = datetime.strptime(row.get("visit_date"), "%Y-%m-%d").date()
+            except Exception:
+                visit_date = date.today()
+
+        claim_id = (row.get("claim_id") or f"CSV-CLM-{idx + 1:03d}").strip()
+
+        line_item = schemas.LineItem(
+            service_date=visit_date,
+            provider_name=provider_name,
+            service_description=description,
+            billed_amount=round(billed, 2),
+            allowed_amount=round(allowed, 2),
+            patient_responsibility=round(patient, 2),
+            insurance_paid=round(insurance, 2),
+            status=status,
+            reason_code=(row.get("reason_code") or None),
+        )
+
+        claims.append(schemas.ClaimGroup(
+            claim_id=claim_id,
+            visit_date=visit_date,
+            provider_name=provider_name,
+            facility_name=row.get("facility_name") or "CSV upload",
+            line_items=[line_item],
+            in_network=in_network,
+            total_billed=round(billed, 2),
+            total_allowed=round(allowed, 2),
+            total_paid_by_insurance=round(insurance, 2),
+            total_patient_responsibility=round(patient, 2),
+        ))
+
+    return claims
+
+
+def _build_placeholder_claim(file_name: str, analysis_id: str) -> schemas.ClaimGroup:
+    """Return a neutral placeholder claim when parsing fails."""
+    line_item = schemas.LineItem(
+        service_date=date.today(),
+        provider_name="Unknown provider",
+        service_description="Unable to parse service lines from uploaded file",
+        billed_amount=0.0,
+        allowed_amount=0.0,
+        patient_responsibility=0.0,
+        insurance_paid=0.0,
+        status="pending",
+        reason_code=None,
+    )
+
+    return schemas.ClaimGroup(
+        claim_id=f"UNPARSED-{analysis_id[:8].upper()}",
+        visit_date=date.today(),
+        provider_name="Unknown provider",
+        facility_name=file_name,
+        line_items=[line_item],
+        in_network=True,
+        total_billed=0.0,
+        total_allowed=0.0,
+        total_paid_by_insurance=0.0,
+        total_patient_responsibility=0.0,
+    )
 
 def _identify_savings_opportunities(
     claims: List[schemas.ClaimGroup]
