@@ -1,0 +1,17 @@
+{
+  "id": "single_in_network_claim",
+  "description": "Single in-network anesthesia claim should parse core totals.",
+  "input": {
+    "file_name": "EOB.pdf",
+    "file_type": ".pdf",
+    "text": "Provider: T BULLARD\nStatus: Network\nServices received ANESTHESIA\nProvider billed $822.00\nAmount saved $526.34\nPlan allowed amount $295.66\nYour plan paid $0.00\nAmount you owe* $295.66\n"
+  },
+  "expect": {
+    "min_total_billed": 820.0,
+    "max_total_billed": 824.0,
+    "min_patient_responsibility": 295.0,
+    "max_patient_responsibility": 296.0,
+    "min_claims": 1,
+    "parser_source_in": ["text_heuristic", "csv_structured"]
+  }
+}

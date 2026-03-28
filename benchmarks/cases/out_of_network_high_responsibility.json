@@ -1,0 +1,14 @@
+{
+  "id": "out_of_network_high_responsibility",
+  "description": "Out-of-network text should produce at least one out_of_network opportunity.",
+  "input": {
+    "file_name": "OON-EOB.pdf",
+    "file_type": ".pdf",
+    "text": "Provider: SAMPLE CLINIC\nStatus: Out-of-Network\nProvider billed $500.00\nPlan allowed amount $150.00\nYour plan paid $0.00\nAmount you owe $150.00\n"
+  },
+  "expect": {
+    "min_claims": 1,
+    "min_out_of_network_opportunities": 1,
+    "parser_source_in": ["text_heuristic", "csv_structured"]
+  }
+}
