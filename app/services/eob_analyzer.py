@@ -276,13 +276,28 @@ def _parse_text_claim(text: str, file_name: str, analysis_id: str):
     ]
     all_amounts = [value for value in all_amounts if value > 0]
 
-    total_billed = _find_amount_near_keywords(text, ["total billed", "billed", "amount billed"])
+    total_billed = _find_amount_near_keywords(text, ["total billed", "provider billed", "amount billed", "billed"])
+    amount_saved = _find_amount_near_keywords(text, ["amount saved", "savings and plan allowed amount", "savings"])
     plan_allowed = _find_amount_near_keywords(text, ["plan allowed", "allowed amount", "allowed"])
     insurance_paid = _find_amount_near_keywords(text, ["insurance paid", "your plan paid", "plan paid"])
-    patient_resp = _find_amount_near_keywords(text, ["amount you owe", "you owe", "patient responsibility"])
+    patient_resp = _find_amount_near_keywords(text, ["amount you owe\\*?", "total you owe", "you owe", "patient responsibility"])
 
+    # If we can reconcile columns directly, prefer that over a noisy billed OCR token.
+    reconciled_billed = 0.0
+    if amount_saved > 0 and plan_allowed > 0:
+        reconciled_billed = round(amount_saved + plan_allowed, 2)
+
+    if total_billed == 0 and reconciled_billed > 0:
+        total_billed = reconciled_billed
     if total_billed == 0 and all_amounts:
         total_billed = max(all_amounts)
+
+    # Correct obvious OCR/parse drift when reconciled amount is available.
+    if reconciled_billed > 0 and total_billed > 0:
+        delta_ratio = abs(total_billed - reconciled_billed) / max(reconciled_billed, 1.0)
+        if delta_ratio > 0.03:
+            total_billed = reconciled_billed
+
     if patient_resp == 0 and "you owe" in text.lower() and all_amounts:
         patient_resp = min(all_amounts)
     if plan_allowed == 0 and total_billed > 0 and patient_resp > 0:
