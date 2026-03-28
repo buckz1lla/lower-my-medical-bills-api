@@ -385,14 +385,25 @@ def _parse_text_claim(text: str, file_name: str, analysis_id: str):
     total_row_values = _extract_total_row_amounts(text)
 
     if total_row_values:
-        if total_billed == 0:
+        # When a full Total amount row is available, treat it as authoritative.
+        # This avoids picking row-level numbers from the body table (for example,
+        # an outpatient line item) as the overall patient responsibility.
+        if len(total_row_values) >= 3:
             total_billed = total_row_values[0]
-        if patient_resp == 0:
-            patient_resp = total_row_values[-1]
-        if plan_allowed == 0 and len(total_row_values) >= 3:
             plan_allowed = total_row_values[2]
-        if insurance_paid == 0 and len(total_row_values) >= 4:
-            insurance_paid = total_row_values[3]
+            insurance_paid = total_row_values[3] if len(total_row_values) >= 4 else insurance_paid
+            patient_resp = total_row_values[-1]
+            if patient_resp == 0 and len(total_row_values) >= 5:
+                patient_resp = total_row_values[4]
+        else:
+            if total_billed == 0:
+                total_billed = total_row_values[0]
+            if patient_resp == 0:
+                patient_resp = total_row_values[-1]
+            if plan_allowed == 0 and len(total_row_values) >= 3:
+                plan_allowed = total_row_values[2]
+            if insurance_paid == 0 and len(total_row_values) >= 4:
+                insurance_paid = total_row_values[3]
 
     # If we can reconcile columns directly, prefer that over a noisy billed OCR token.
     reconciled_billed = 0.0
