@@ -75,7 +75,9 @@ class OwnerLoginRequest(BaseModel):
 
 @router.get("/admin/me")
 async def admin_me(request: Request):
-    return {"authenticated": is_owner_authenticated(request)}
+    if not is_owner_authenticated(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return {"authenticated": True}
 
 
 @router.post("/admin/login")
