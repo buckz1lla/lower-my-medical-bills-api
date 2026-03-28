@@ -6,6 +6,7 @@ import csv
 import io
 import os
 import re
+from pypdf import PdfReader
 from app.services.rule_engine import evaluate_claims
 
 # Simulated database of common billing errors and patterns
@@ -217,6 +218,29 @@ def _build_claims_from_uploaded_file(
             "parser_warning": "This file type requires OCR/structured parser support. Try CSV for deterministic extraction.",
         }
 
+    if file_type == ".pdf" and _looks_like_pdf_binary(content):
+        text = _extract_pdf_text(content)
+        if not _looks_like_text(text):
+            return [_build_placeholder_claim(file_name=file_name, analysis_id=analysis_id)], {
+                "analysis_mode": "live",
+                "parser_source": "unparsed_placeholder",
+                "parser_warning": "Could not extract readable text from this PDF yet. OCR support may be required.",
+            }
+
+        claim = _parse_text_claim(text=text, file_name=file_name, analysis_id=analysis_id)
+        if claim is not None:
+            return [claim], {
+                "analysis_mode": "live",
+                "parser_source": "pdf_text_heuristic",
+                "parser_warning": "PDF text extraction used. Verify totals against your EOB before acting.",
+            }
+
+        return [_build_placeholder_claim(file_name=file_name, analysis_id=analysis_id)], {
+            "analysis_mode": "live",
+            "parser_source": "unparsed_placeholder",
+            "parser_warning": "PDF text was extracted but could not be mapped to claims reliably.",
+        }
+
     if file_type == ".csv":
         claims = _parse_csv_claims(content)
         if claims:
@@ -270,6 +294,25 @@ def _decode_text_content(content: bytes, max_bytes: int = 1_000_000) -> str:
     return ""
 
 
+def _extract_pdf_text(content: bytes, max_pages: int = 15) -> str:
+    try:
+        reader = PdfReader(io.BytesIO(content))
+        chunks = []
+        for idx, page in enumerate(reader.pages):
+            if idx >= max_pages:
+                break
+            extracted = page.extract_text() or ""
+            if extracted:
+                chunks.append(extracted)
+        return "\n".join(chunks)
+    except Exception:
+        return ""
+
+
+def _looks_like_pdf_binary(content: bytes) -> bool:
+    return bool(content and content[:5] == b"%PDF-")
+
+
 def _looks_like_text(value: str) -> bool:
     if not value:
         return False
@@ -304,6 +347,26 @@ def _find_amount_near_keywords(text: str, keywords: List[str]) -> float:
     return 0.0
 
 
+def _extract_total_row_amounts(text: str) -> List[float]:
+    if not text:
+        return []
+
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    money_pattern = r"\$?\d{1,3}(?:,\d{3})*\.\d{2}|\$?\d+\.\d{2}"
+
+    for idx, line in enumerate(lines):
+        if "total amount" not in line.lower():
+            continue
+
+        window = " ".join(lines[idx: min(idx + 2, len(lines))])
+        values = [_to_float(value) for value in re.findall(money_pattern, window)]
+        values = [v for v in values if v >= 0]
+        if len(values) >= 2:
+            return values
+
+    return []
+
+
 def _parse_text_claim(text: str, file_name: str, analysis_id: str):
     if not text or len(text.strip()) < 20:
         return None
@@ -319,6 +382,17 @@ def _parse_text_claim(text: str, file_name: str, analysis_id: str):
     plan_allowed = _find_amount_near_keywords(text, ["plan allowed", "allowed amount", "allowed"])
     insurance_paid = _find_amount_near_keywords(text, ["insurance paid", "your plan paid", "plan paid"])
     patient_resp = _find_amount_near_keywords(text, ["amount you owe\\*?", "total you owe", "you owe", "patient responsibility"])
+    total_row_values = _extract_total_row_amounts(text)
+
+    if total_row_values:
+        if total_billed == 0:
+            total_billed = total_row_values[0]
+        if patient_resp == 0:
+            patient_resp = total_row_values[-1]
+        if plan_allowed == 0 and len(total_row_values) >= 3:
+            plan_allowed = total_row_values[2]
+        if insurance_paid == 0 and len(total_row_values) >= 4:
+            insurance_paid = total_row_values[3]
 
     # If we can reconcile columns directly, prefer that over a noisy billed OCR token.
     reconciled_billed = 0.0
