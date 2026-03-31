@@ -83,7 +83,14 @@ def _rule_out_of_network(claims: List[schemas.ClaimGroup]) -> List[schemas.Savin
     opportunities: List[schemas.SavingsOpportunity] = []
 
     for claim in claims:
-        if claim.in_network or claim.total_patient_responsibility <= 0:
+        network_status = getattr(claim, "network_status", "unknown")
+        network_confidence = getattr(claim, "network_confidence", "low")
+
+        if claim.total_patient_responsibility <= 0:
+            continue
+
+        # Safety guard: only raise out-of-network opportunities when status is explicit.
+        if network_status != "out_of_network" or network_confidence == "low":
             continue
 
         missing_data_points = [

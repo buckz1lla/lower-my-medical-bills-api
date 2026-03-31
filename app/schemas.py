@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import date
 
@@ -25,7 +25,11 @@ class ClaimGroup(BaseModel):
     provider_npi: Optional[str] = None
     facility_name: Optional[str] = None
     line_items: List[LineItem]
-    in_network: bool
+    in_network: Optional[bool] = None
+    network_status: str = "unknown"  # "in_network", "out_of_network", "unknown"
+    network_confidence: str = "low"  # "high", "medium", "low"
+    network_evidence: List[str] = Field(default_factory=list)
+    network_missing_data_points: List[str] = Field(default_factory=list)
     total_billed: float
     total_allowed: float
     total_paid_by_insurance: float
