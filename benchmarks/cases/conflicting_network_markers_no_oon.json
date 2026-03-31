@@ -1,0 +1,17 @@
+{
+  "id": "conflicting_network_markers_no_oon",
+  "description": "When both in-network and out-of-network markers are present, network state should be treated as unknown and avoid out_of_network opportunity.",
+  "weight": 1.8,
+  "input": {
+    "file_name": "conflicting-network.pdf",
+    "file_type": ".pdf",
+    "text": "Provider: COMMUNITY CLINIC\nStatus: In-network review note\nAdditional remark: out-of-network exception text\nProvider billed $1200.00\nPlan allowed amount $500.00\nYour plan paid $0.00\nAmount you owe $500.00\n"
+  },
+  "expect": {
+    "min_claims": 1,
+    "parser_source_in": ["text_heuristic", "csv_structured"],
+    "max_opportunities_by_type": {
+      "out_of_network": 0
+    }
+  }
+}

@@ -10,6 +10,7 @@ accuracy, precision, recall, and F1.
 
 from __future__ import annotations
 
+import argparse
 from datetime import date
 from typing import List, Dict, Any
 
@@ -227,7 +228,7 @@ def compute_metrics(tp: int, fp: int, fn: int, tn: int) -> Dict[str, float]:
     }
 
 
-def run_validation() -> None:
+def run_validation() -> Dict[str, Any]:
     print("=" * 80)
     print("CONFIDENCE VALIDATION HARNESS")
     print("=" * 80)
@@ -275,6 +276,49 @@ def run_validation() -> None:
     print("- Target precision >= 85% (avoid false alarms)")
     print("- Target recall    >= 80% (catch most real issues)")
 
+    return {
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
+        "metrics": metrics,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run confidence validation harness with optional gate thresholds.")
+    parser.add_argument("--min-precision", type=float, default=0.85, help="Minimum precision as decimal, e.g. 0.85")
+    parser.add_argument("--min-recall", type=float, default=0.80, help="Minimum recall as decimal, e.g. 0.80")
+    parser.add_argument("--max-false-positives", type=int, default=0, help="Maximum allowed false positives")
+    args = parser.parse_args()
+
+    results = run_validation()
+    metrics = results["metrics"]
+    fp = int(results["fp"])
+
+    failures = []
+    if metrics["precision"] < args.min_precision:
+        failures.append(
+            f"precision {metrics['precision']:.2%} is below minimum {args.min_precision:.2%}"
+        )
+    if metrics["recall"] < args.min_recall:
+        failures.append(
+            f"recall {metrics['recall']:.2%} is below minimum {args.min_recall:.2%}"
+        )
+    if fp > args.max_false_positives:
+        failures.append(
+            f"false positives {fp} exceed max allowed {args.max_false_positives}"
+        )
+
+    if failures:
+        print("\nGate decision: FAIL")
+        for failure in failures:
+            print(f"- {failure}")
+        return 2
+
+    print("\nGate decision: PASS")
+    return 0
+
 
 if __name__ == "__main__":
-    run_validation()
+    raise SystemExit(main())
