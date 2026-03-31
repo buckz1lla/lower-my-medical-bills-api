@@ -1,0 +1,17 @@
+{
+  "id": "csv_explicit_unknown_overrides_legacy_bool",
+  "description": "Explicit network_status=unknown should take precedence over legacy in_network=false and avoid out_of_network opportunities.",
+  "weight": 1.9,
+  "input": {
+    "file_name": "explicit-unknown-network.csv",
+    "file_type": ".csv",
+    "text": "claim_id,visit_date,provider_name,service_description,billed_amount,allowed_amount,patient_responsibility,insurance_paid,status,in_network,network_status\nCLM-CSV-UNKNOWN,2026-03-03,Ambiguous Clinic,Specialist Visit,900.00,300.00,300.00,0.00,paid,false,unknown\n"
+  },
+  "expect": {
+    "parser_source_equals": "csv_structured",
+    "min_claims": 1,
+    "max_opportunities_by_type": {
+      "out_of_network": 0
+    }
+  }
+}
