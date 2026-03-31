@@ -84,8 +84,9 @@ async def analyze_eob(
     # Build key metrics
     key_metrics = {
         "total_claims": len(claims),
-        "in_network_claims": sum(1 for c in claims if c.in_network),
-        "out_of_network_claims": sum(1 for c in claims if not c.in_network),
+        "in_network_claims": sum(1 for c in claims if getattr(c, "network_status", "unknown") == "in_network"),
+        "out_of_network_claims": sum(1 for c in claims if getattr(c, "network_status", "unknown") == "out_of_network"),
+        "unknown_network_claims": sum(1 for c in claims if getattr(c, "network_status", "unknown") == "unknown"),
         "denied_claims": sum(1 for claim in claims for item in claim.line_items if item.status == "denied"),
         "billing_error_ratio": _calculate_error_ratio(claims),
         "oob_overpayment": _calculate_oob_overpayment(claims),
@@ -143,6 +144,10 @@ def _generate_demo_claims() -> List[schemas.ClaimGroup]:
                 )
             ],
             in_network=True,
+            network_status="in_network",
+            network_confidence="high",
+            network_evidence=["Demo claim configured as in-network"],
+            network_missing_data_points=[],
             total_billed=3300.00,
             total_allowed=1500.00,
             total_paid_by_insurance=1050.00,
@@ -168,6 +173,10 @@ def _generate_demo_claims() -> List[schemas.ClaimGroup]:
                 )
             ],
             in_network=False,
+            network_status="out_of_network",
+            network_confidence="high",
+            network_evidence=["Demo claim configured as out-of-network"],
+            network_missing_data_points=[],
             total_billed=500.00,
             total_allowed=150.00,
             total_paid_by_insurance=0.00,
@@ -192,6 +201,10 @@ def _generate_demo_claims() -> List[schemas.ClaimGroup]:
                 )
             ],
             in_network=True,
+            network_status="in_network",
+            network_confidence="high",
+            network_evidence=["Demo claim configured as in-network"],
+            network_missing_data_points=[],
             total_billed=250.00,
             total_allowed=120.00,
             total_paid_by_insurance=90.00,
@@ -469,7 +482,8 @@ def _parse_text_claim(text: str, file_name: str, analysis_id: str):
         except Exception:
             visit_date = date.today()
 
-    in_network = "out-of-network" not in text.lower() and "out of network" not in text.lower()
+    network_status, network_confidence, network_evidence, network_missing_data_points = _infer_network_status_from_text(text)
+    in_network = True if network_status == "in_network" else False if network_status == "out_of_network" else None
     status = "denied" if "denied" in text.lower() else "paid"
 
     line_item = schemas.LineItem(
@@ -491,6 +505,10 @@ def _parse_text_claim(text: str, file_name: str, analysis_id: str):
         facility_name=file_name,
         line_items=[line_item],
         in_network=in_network,
+        network_status=network_status,
+        network_confidence=network_confidence,
+        network_evidence=network_evidence,
+        network_missing_data_points=network_missing_data_points,
         total_billed=round(total_billed, 2),
         total_allowed=round(plan_allowed, 2),
         total_paid_by_insurance=round(insurance_paid, 2),
@@ -520,8 +538,39 @@ def _parse_csv_claims(content: bytes) -> List[schemas.ClaimGroup]:
         provider_name = (row.get("provider_name") or "Provider from CSV").strip()
         description = (row.get("service_description") or "Service from CSV").strip()
         status = (row.get("status") or "paid").strip().lower()
-        in_network_raw = (row.get("in_network") or "true").strip().lower()
-        in_network = in_network_raw in {"true", "1", "yes", "y"}
+        network_status = "unknown"
+        network_confidence = "low"
+        network_evidence: List[str] = []
+        network_missing_data_points = [
+            "Explicit network indicator from payer EOB",
+            "Provider directory status on date of service",
+        ]
+
+        network_status_raw = (row.get("network_status") or "").strip().lower()
+        if network_status_raw in {"in_network", "in", "innetwork"}:
+            network_status = "in_network"
+            network_confidence = "high"
+            network_evidence = ["CSV provided explicit network_status=in_network"]
+            network_missing_data_points = []
+        elif network_status_raw in {"out_of_network", "out", "outofnetwork"}:
+            network_status = "out_of_network"
+            network_confidence = "high"
+            network_evidence = ["CSV provided explicit network_status=out_of_network"]
+            network_missing_data_points = []
+        else:
+            in_network_raw = (row.get("in_network") or "").strip().lower()
+            if in_network_raw in {"true", "1", "yes", "y"}:
+                network_status = "in_network"
+                network_confidence = "medium"
+                network_evidence = ["CSV provided legacy in_network=true"]
+                network_missing_data_points = ["Explicit network field from payer EOB"]
+            elif in_network_raw in {"false", "0", "no", "n"}:
+                network_status = "out_of_network"
+                network_confidence = "medium"
+                network_evidence = ["CSV provided legacy in_network=false"]
+                network_missing_data_points = ["Explicit network field from payer EOB"]
+
+        in_network = True if network_status == "in_network" else False if network_status == "out_of_network" else None
 
         visit_date = date.today()
         if row.get("visit_date"):
@@ -551,6 +600,10 @@ def _parse_csv_claims(content: bytes) -> List[schemas.ClaimGroup]:
             facility_name=row.get("facility_name") or "CSV upload",
             line_items=[line_item],
             in_network=in_network,
+            network_status=network_status,
+            network_confidence=network_confidence,
+            network_evidence=network_evidence,
+            network_missing_data_points=network_missing_data_points,
             total_billed=round(billed, 2),
             total_allowed=round(allowed, 2),
             total_paid_by_insurance=round(insurance, 2),
@@ -580,12 +633,57 @@ def _build_placeholder_claim(file_name: str, analysis_id: str) -> schemas.ClaimG
         provider_name="Unknown provider",
         facility_name=file_name,
         line_items=[line_item],
-        in_network=True,
+        in_network=None,
+        network_status="unknown",
+        network_confidence="low",
+        network_evidence=[],
+        network_missing_data_points=[
+            "Explicit network indicator from payer EOB",
+            "Provider directory status on date of service",
+        ],
         total_billed=0.0,
         total_allowed=0.0,
         total_paid_by_insurance=0.0,
         total_patient_responsibility=0.0,
     )
+
+
+def _infer_network_status_from_text(text: str):
+    lowered = (text or "").lower()
+    evidence: List[str] = []
+    missing_data_points = [
+        "Provider directory status on date of service",
+        "Plan-specific out-of-network benefit design",
+    ]
+
+    out_markers = [
+        "out-of-network",
+        "out of network",
+        "non-participating",
+        "non participating",
+    ]
+    in_markers = [
+        "in-network",
+        "in network",
+        "participating provider",
+    ]
+
+    has_out = any(marker in lowered for marker in out_markers)
+    has_in = any(marker in lowered for marker in in_markers)
+
+    if has_out and not has_in:
+        evidence.append("Found explicit out-of-network marker in uploaded text")
+        return "out_of_network", "high", evidence, []
+
+    if has_in and not has_out:
+        evidence.append("Found explicit in-network marker in uploaded text")
+        return "in_network", "high", evidence, []
+
+    if has_in and has_out:
+        evidence.append("Conflicting in-network and out-of-network markers found in uploaded text")
+        return "unknown", "medium", evidence, missing_data_points
+
+    return "unknown", "low", evidence, missing_data_points
 
 def _identify_savings_opportunities(
     claims: List[schemas.ClaimGroup]
@@ -647,7 +745,11 @@ def _calculate_oob_overpayment(claims: List[schemas.ClaimGroup]) -> float:
     """Calculate potential overpayment from out-of-network claims."""
     total = 0.0
     for claim in claims:
-        if not claim.in_network:
+        is_out_of_network = getattr(claim, "network_status", "unknown") == "out_of_network"
+        if not is_out_of_network and getattr(claim, "in_network", None) is False:
+            is_out_of_network = True
+
+        if is_out_of_network:
             # Out-of-network might have balance billing
             total += (claim.total_billed - claim.total_allowed) * 0.5
     return total
