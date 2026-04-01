@@ -547,6 +547,7 @@ def _parse_csv_claims(content: bytes) -> List[schemas.ClaimGroup]:
         ]
 
         network_status_raw = (row.get("network_status") or "").strip().lower()
+        has_explicit_network_status = bool(network_status_raw)
         if network_status_raw in {"in_network", "in", "innetwork"}:
             network_status = "in_network"
             network_confidence = "high"
@@ -557,18 +558,27 @@ def _parse_csv_claims(content: bytes) -> List[schemas.ClaimGroup]:
             network_confidence = "high"
             network_evidence = ["CSV provided explicit network_status=out_of_network"]
             network_missing_data_points = []
+        elif network_status_raw in {"unknown", "uncertain", "na", "n/a"}:
+            network_status = "unknown"
+            network_confidence = "medium"
+            network_evidence = ["CSV provided explicit network_status=unknown"]
+            network_missing_data_points = [
+                "Explicit network indicator from payer EOB",
+                "Provider directory status on date of service",
+            ]
         else:
-            in_network_raw = (row.get("in_network") or "").strip().lower()
-            if in_network_raw in {"true", "1", "yes", "y"}:
-                network_status = "in_network"
-                network_confidence = "medium"
-                network_evidence = ["CSV provided legacy in_network=true"]
-                network_missing_data_points = ["Explicit network field from payer EOB"]
-            elif in_network_raw in {"false", "0", "no", "n"}:
-                network_status = "out_of_network"
-                network_confidence = "medium"
-                network_evidence = ["CSV provided legacy in_network=false"]
-                network_missing_data_points = ["Explicit network field from payer EOB"]
+            if not has_explicit_network_status:
+                in_network_raw = (row.get("in_network") or "").strip().lower()
+                if in_network_raw in {"true", "1", "yes", "y"}:
+                    network_status = "in_network"
+                    network_confidence = "medium"
+                    network_evidence = ["CSV provided legacy in_network=true"]
+                    network_missing_data_points = ["Explicit network field from payer EOB"]
+                elif in_network_raw in {"false", "0", "no", "n"}:
+                    network_status = "out_of_network"
+                    network_confidence = "medium"
+                    network_evidence = ["CSV provided legacy in_network=false"]
+                    network_missing_data_points = ["Explicit network field from payer EOB"]
 
         in_network = True if network_status == "in_network" else False if network_status == "out_of_network" else None
 

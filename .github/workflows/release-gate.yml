@@ -27,9 +27,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Run unit tests
+        run: |
+          python -m unittest discover -s tests -p "test_*.py"
+
       - name: Run release gate
         run: |
           python scripts/run_release_gate.py
+
+      - name: Run confidence harness gate
+        run: |
+          python test_confidence_validation.py --min-precision 0.85 --min-recall 0.80 --max-false-positives 0
 
       - name: Upload benchmark artifacts
         if: always()

@@ -10,6 +10,7 @@ accuracy, precision, recall, and F1.
 
 from __future__ import annotations
 
+import argparse
 from datetime import date
 from typing import List, Dict, Any
 
@@ -40,14 +41,29 @@ def make_line_item(
 def make_claim(
     claim_id: str,
     visit_date: date,
-    in_network: bool,
+    in_network: bool | None,
     line_items: List[schemas.LineItem],
     provider_name: str = "Test Facility",
+    network_status: str | None = None,
+    network_confidence: str | None = None,
 ) -> schemas.ClaimGroup:
     total_billed = round(sum(item.billed_amount for item in line_items), 2)
     total_allowed = round(sum(item.allowed_amount for item in line_items), 2)
     total_patient = round(sum(item.patient_responsibility for item in line_items), 2)
     total_ins_paid = round(sum(item.insurance_paid for item in line_items), 2)
+
+    resolved_network_status = network_status
+    if resolved_network_status is None:
+        if in_network is True:
+            resolved_network_status = "in_network"
+        elif in_network is False:
+            resolved_network_status = "out_of_network"
+        else:
+            resolved_network_status = "unknown"
+
+    resolved_network_confidence = network_confidence
+    if resolved_network_confidence is None:
+        resolved_network_confidence = "high" if resolved_network_status != "unknown" else "low"
 
     return schemas.ClaimGroup(
         claim_id=claim_id,
@@ -57,6 +73,10 @@ def make_claim(
         facility_name=provider_name,
         line_items=line_items,
         in_network=in_network,
+        network_status=resolved_network_status,
+        network_confidence=resolved_network_confidence,
+        network_evidence=["validation_harness"],
+        network_missing_data_points=[] if resolved_network_status != "unknown" else ["explicit payer network marker"],
         total_billed=total_billed,
         total_allowed=total_allowed,
         total_paid_by_insurance=total_ins_paid,
@@ -95,10 +115,28 @@ TEST_CASES: List[Dict[str, Any]] = [
                 visit_date=date(2024, 2, 1),
                 in_network=False,
                 provider_name="OON Lab",
+                network_status="out_of_network",
+                network_confidence="high",
                 line_items=[make_line_item("Lab Panel", 800.0)],
             )
         ],
         "notes": "Should trigger out_of_network rule.",
+    },
+    {
+        "name": "Unknown network should not trigger OON",
+        "expected_flag": False,
+        "claims": [
+            make_claim(
+                claim_id="CLM-003B",
+                visit_date=date(2024, 2, 2),
+                in_network=None,
+                provider_name="Unclear Network Lab",
+                network_status="unknown",
+                network_confidence="low",
+                line_items=[make_line_item("Lab Panel", 850.0)],
+            )
+        ],
+        "notes": "Safety guard should avoid out_of_network opportunity when network status is unknown.",
     },
     {
         "name": "Denied high-dollar line item",
@@ -190,7 +228,7 @@ def compute_metrics(tp: int, fp: int, fn: int, tn: int) -> Dict[str, float]:
     }
 
 
-def run_validation() -> None:
+def run_validation() -> Dict[str, Any]:
     print("=" * 80)
     print("CONFIDENCE VALIDATION HARNESS")
     print("=" * 80)
@@ -238,6 +276,49 @@ def run_validation() -> None:
     print("- Target precision >= 85% (avoid false alarms)")
     print("- Target recall    >= 80% (catch most real issues)")
 
+    return {
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
+        "metrics": metrics,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run confidence validation harness with optional gate thresholds.")
+    parser.add_argument("--min-precision", type=float, default=0.85, help="Minimum precision as decimal, e.g. 0.85")
+    parser.add_argument("--min-recall", type=float, default=0.80, help="Minimum recall as decimal, e.g. 0.80")
+    parser.add_argument("--max-false-positives", type=int, default=0, help="Maximum allowed false positives")
+    args = parser.parse_args()
+
+    results = run_validation()
+    metrics = results["metrics"]
+    fp = int(results["fp"])
+
+    failures = []
+    if metrics["precision"] < args.min_precision:
+        failures.append(
+            f"precision {metrics['precision']:.2%} is below minimum {args.min_precision:.2%}"
+        )
+    if metrics["recall"] < args.min_recall:
+        failures.append(
+            f"recall {metrics['recall']:.2%} is below minimum {args.min_recall:.2%}"
+        )
+    if fp > args.max_false_positives:
+        failures.append(
+            f"false positives {fp} exceed max allowed {args.max_false_positives}"
+        )
+
+    if failures:
+        print("\nGate decision: FAIL")
+        for failure in failures:
+            print(f"- {failure}")
+        return 2
+
+    print("\nGate decision: PASS")
+    return 0
+
 
 if __name__ == "__main__":
-    run_validation()
+    raise SystemExit(main())
