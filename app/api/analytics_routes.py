@@ -30,6 +30,46 @@ class AnalyticsEvent(BaseModel):
 
 # Log events to a simple JSON file
 def log_event_to_file(event: AnalyticsEvent):
+from supabase import create_client
+import requests
+
+# Initialize Supabase client
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+supabase_client = None
+
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Warning: Failed to initialize Supabase: {e}")
+
+
+# Log events to Supabase (primary) then file (fallback)
+def log_event_to_database(event: AnalyticsEvent):
+    """Store analytics events in Supabase with fallback to file"""
+    event_dict = {
+        "event_name": event.event,
+        "event_data": event.data or {},
+        "timestamp": event.timestamp or datetime.now().isoformat(),
+        "analysis_id": event.data.get("analysisId") if event.data else None,
+        "session_id": event.data.get("sessionId") if event.data else None,
+    }
+    
+    # Try Supabase first
+    if supabase_client:
+        try:
+            supabase_client.table("events").insert(event_dict).execute()
+            return True
+        except Exception as e:
+            print(f"Supabase insert error: {e}, falling back to file logging")
+    
+    # Fallback to file logging
+    log_event_to_file(event)
+    return False
+
+
+def log_event_to_file(event: AnalyticsEvent):
     """Log analytics events to a file for later analysis"""
     analytics_dir = Path(__file__).parent.parent.parent / "analytics"
     analytics_dir.mkdir(exist_ok=True)
