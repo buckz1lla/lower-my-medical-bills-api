@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 import json
 import os
 from pathlib import Path
+from supabase import create_client
 from app.security import is_owner_authenticated
 
 router = APIRouter()
@@ -28,14 +29,11 @@ class AnalyticsEvent(BaseModel):
     userAgent: Optional[str] = None
 
 
-# Log events to a simple JSON file
-def log_event_to_file(event: AnalyticsEvent):
-from supabase import create_client
-import requests
-
-# Initialize Supabase client
+# Initialize Supabase client.
+# Prefer the service-role key on the backend because the events table does not
+# grant anon insert access under the current RLS policy.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip()
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip() or os.getenv("SUPABASE_ANON_KEY", "").strip()
 supabase_client = None
 
 if SUPABASE_URL and SUPABASE_KEY:
@@ -181,11 +179,12 @@ async def track_event(event: AnalyticsEvent):
     - affiliate_link_clicked: User clicked affiliate link
     """
     try:
-        log_event_to_file(event)
+        stored_in_database = log_event_to_database(event)
         return {
             "status": "tracked",
             "event": event.event,
-            "timestamp": event.timestamp or datetime.now().isoformat()
+            "timestamp": event.timestamp or datetime.now().isoformat(),
+            "storage": "supabase" if stored_in_database else "file_fallback",
         }
     except Exception as e:
         print(f"Analytics tracking error: {e}")
