@@ -1,0 +1,58 @@
+name: Analytics Weekly Ops
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 14 * * 5"
+
+permissions:
+  contents: write
+
+jobs:
+  weekly-metrics-log:
+    name: Weekly Metrics Log
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Append weekly metrics
+        shell: pwsh
+        env:
+          ANALYTICS_API_KEY: ${{ secrets.ANALYTICS_API_KEY }}
+          ANALYTICS_API_BASE: ${{ vars.ANALYTICS_API_BASE }}
+        run: |
+          $apiBase = if ($env:ANALYTICS_API_BASE) { $env:ANALYTICS_API_BASE } else { "https://api.lowermymedicalbills.com" }
+          ./scripts/run-weekly-metrics.ps1 -ApiBase $apiBase -AnalyticsApiKey $env:ANALYTICS_API_KEY
+
+      - name: Commit weekly metrics log
+        shell: bash
+        run: |
+          if git diff --quiet -- docs/analytics_weekly_log.md; then
+            echo "No changes to weekly metrics log."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/analytics_weekly_log.md
+          git commit -m "chore: append weekly analytics metrics"
+          git push
+
+  threshold-check:
+    name: Threshold Check
+    runs-on: ubuntu-latest
+    needs: weekly-metrics-log
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run threshold check
+        shell: pwsh
+        env:
+          ANALYTICS_API_KEY: ${{ secrets.ANALYTICS_API_KEY }}
+          ANALYTICS_API_BASE: ${{ vars.ANALYTICS_API_BASE }}
+        run: |
+          $apiBase = if ($env:ANALYTICS_API_BASE) { $env:ANALYTICS_API_BASE } else { "https://api.lowermymedicalbills.com" }
+          ./scripts/run-analytics-threshold-check.ps1 -ApiBase $apiBase -AnalyticsApiKey $env:ANALYTICS_API_KEY

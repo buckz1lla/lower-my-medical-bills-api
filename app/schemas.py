@@ -28,6 +28,9 @@ class ClaimGroup(BaseModel):
     in_network: Optional[bool] = None
     network_status: str = "unknown"  # "in_network", "out_of_network", "unknown"
     network_confidence: str = "low"  # "high", "medium", "low"
+    evidence: List[str] = Field(default_factory=list)
+    missing_data_points: List[str] = Field(default_factory=list)
+    # Backward-compatible fields kept for existing clients.
     network_evidence: List[str] = Field(default_factory=list)
     network_missing_data_points: List[str] = Field(default_factory=list)
     total_billed: float
@@ -50,6 +53,7 @@ class SavingsOpportunity(BaseModel):
     time_estimate_days: int
     confidence_score: float  # 0-1 confidence this is actionable
     confidence_level: str  # "high", "medium", "low"
+    evidence: List[str] = Field(default_factory=list)
     flag_reason: str
     verification_steps: List[str]
     could_be_correct_if: List[str]

@@ -21,6 +21,17 @@ TRACKED_EVENTS = [
     "appeal_tracker_updated",
 ]
 
+
+def _analytics_dir() -> Path:
+    analytics_dir = Path(__file__).parent.parent.parent / "analytics"
+    analytics_dir.mkdir(exist_ok=True)
+    return analytics_dir
+
+
+def _append_jsonl(log_file: Path, payload: dict) -> None:
+    with open(log_file, "a") as f:
+        f.write(json.dumps(payload) + "\n")
+
 # Simple in-memory analytics (can upgrade to database later)
 class AnalyticsEvent(BaseModel):
     event: str
@@ -60,7 +71,10 @@ def log_event_to_database(event: AnalyticsEvent):
             supabase_client.table("events").insert(event_dict).execute()
             return True
         except Exception as e:
+            log_storage_fallback_alert(event, f"supabase_insert_error: {e}")
             print(f"Supabase insert error: {e}, falling back to file logging")
+    else:
+        log_storage_fallback_alert(event, "supabase_client_not_initialized")
     
     # Fallback to file logging
     log_event_to_file(event)
@@ -69,8 +83,7 @@ def log_event_to_database(event: AnalyticsEvent):
 
 def log_event_to_file(event: AnalyticsEvent):
     """Log analytics events to a file for later analysis"""
-    analytics_dir = Path(__file__).parent.parent.parent / "analytics"
-    analytics_dir.mkdir(exist_ok=True)
+    analytics_dir = _analytics_dir()
     
     # Create a daily log file
     today = datetime.now().strftime("%Y-%m-%d")
@@ -85,10 +98,28 @@ def log_event_to_file(event: AnalyticsEvent):
     }
     
     try:
-        with open(log_file, "a") as f:
-            f.write(json.dumps(event_dict) + "\n")
+        _append_jsonl(log_file, event_dict)
     except Exception as e:
         print(f"Error logging analytics: {e}")
+
+
+def log_storage_fallback_alert(event: AnalyticsEvent, reason: str):
+    """Write high-signal fallback alerts so storage regressions are visible."""
+    analytics_dir = _analytics_dir()
+    today = datetime.now().strftime("%Y-%m-%d")
+    alert_file = analytics_dir / f"alerts-{today}.jsonl"
+    payload = {
+        "type": "analytics_storage_fallback",
+        "timestamp": datetime.now().isoformat(),
+        "reason": reason,
+        "event": event.event,
+        "analysisId": event.data.get("analysisId") if event.data else None,
+        "sessionId": event.data.get("sessionId") if event.data else None,
+    }
+    try:
+        _append_jsonl(alert_file, payload)
+    except Exception as e:
+        print(f"Error logging fallback alert: {e}")
 
 
 def _empty_event_counts() -> Dict[str, int]:
@@ -96,7 +127,7 @@ def _empty_event_counts() -> Dict[str, int]:
 
 
 def _read_day_event_counts(day_str: str) -> Dict[str, int]:
-    analytics_dir = Path(__file__).parent.parent.parent / "analytics"
+    analytics_dir = _analytics_dir()
     log_file = analytics_dir / f"analytics-{day_str}.jsonl"
     counts = _empty_event_counts()
 
@@ -119,7 +150,7 @@ def _read_day_event_counts(day_str: str) -> Dict[str, int]:
 
 
 def _read_day_events(day_str: str) -> list[dict]:
-    analytics_dir = Path(__file__).parent.parent.parent / "analytics"
+    analytics_dir = _analytics_dir()
     log_file = analytics_dir / f"analytics-{day_str}.jsonl"
     events: list[dict] = []
 
@@ -199,7 +230,7 @@ async def get_analytics_summary(request: Request, api_key: Optional[str] = Query
     Note: This is a simple endpoint for debugging. Upgrade to database for production.
     """
     _enforce_analytics_access(api_key, request)
-    analytics_dir = Path(__file__).parent.parent.parent / "analytics"
+    analytics_dir = _analytics_dir()
     today = datetime.now().strftime("%Y-%m-%d")
     log_file = analytics_dir / f"analytics-{today}.jsonl"
     
@@ -233,6 +264,45 @@ async def get_analytics_summary(request: Request, api_key: Optional[str] = Query
             print(f"Error reading analytics: {e}")
     
     return summary
+
+
+@router.get("/analytics/storage-alerts")
+async def get_storage_alerts(
+    request: Request,
+    days: int = Query(7, ge=1, le=30),
+    max_items: int = Query(50, ge=1, le=200),
+    api_key: Optional[str] = Query(None),
+):
+    """
+    Return recent fallback alerts from file-based alert logs.
+    Useful for quickly spotting storage regressions in production.
+    """
+    _enforce_analytics_access(api_key, request)
+    today = datetime.now().date()
+    analytics_dir = _analytics_dir()
+    rows: list[dict] = []
+
+    for i in range(days - 1, -1, -1):
+        day = today - timedelta(days=i)
+        day_str = day.strftime("%Y-%m-%d")
+        alert_file = analytics_dir / f"alerts-{day_str}.jsonl"
+        if not alert_file.exists():
+            continue
+        try:
+            with open(alert_file, "r") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    rows.append(json.loads(line))
+        except Exception as e:
+            print(f"Error reading alerts for {day_str}: {e}")
+
+    rows.sort(key=lambda x: x.get("timestamp") or "", reverse=True)
+    return {
+        "days": days,
+        "count": len(rows),
+        "alerts": rows[:max_items],
+    }
 
 
 @router.get("/analytics/funnel")
