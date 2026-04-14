@@ -72,6 +72,10 @@ def _rule_duplicate_charge(claims: List[schemas.ClaimGroup]) -> List[schemas.Sav
                         "The service was repeated for medical necessity (for example, repeat imaging).",
                         "One line is a technical component and the other is a professional component.",
                     ],
+                    evidence=[
+                        "Matched service description appears multiple times for the same visit date",
+                        "Billed amount pattern suggests potential duplicate billing",
+                    ],
                     missing_data_points=missing_data_points,
                 )
             )
@@ -124,6 +128,10 @@ def _rule_out_of_network(claims: List[schemas.ClaimGroup]) -> List[schemas.Savin
                     "Your plan has limited or no out-of-network benefits.",
                     "The service occurred before referral/prior authorization requirements were met.",
                 ],
+                evidence=[
+                    "Claim network status is explicitly out_of_network",
+                    "Patient responsibility is elevated relative to allowed amount",
+                ],
                 missing_data_points=missing_data_points,
             )
         )
@@ -168,6 +176,10 @@ def _rule_denied_claim_appeal(claims: List[schemas.ClaimGroup]) -> List[schemas.
                     could_be_correct_if=[
                         "The service is explicitly excluded by your plan documents.",
                         "Filing deadlines or authorization rules were not met.",
+                    ],
+                    evidence=[
+                        "At least one line item is denied",
+                        "Denied line billed amount is above review threshold",
                     ],
                     missing_data_points=missing_data_points,
                 )
