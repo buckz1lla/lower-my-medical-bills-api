@@ -88,3 +88,65 @@ Override thresholds:
 ```powershell
 venv\Scripts\python scripts\run_release_gate.py --raw-threshold 96 --weighted-threshold 98 --allow-case-failures 0
 ```
+
+## Analytics operations
+
+This repo now includes a reusable analytics query pack and a weekly runbook:
+
+- `docs/analytics_funnel_queries.sql`
+- `docs/analytics_weekly_metrics_checklist.md`
+
+For quick API-level health checks of funnel metrics, run:
+
+```powershell
+./scripts/run-analytics-qa.ps1 -ApiBase https://api.lowermymedicalbills.com
+```
+
+Optional smoke tracking call and protected endpoint key:
+
+```powershell
+./scripts/run-analytics-qa.ps1 -ApiBase https://api.lowermymedicalbills.com -AnalyticsApiKey <your_key> -SmokeTrack
+```
+
+By default, `-SmokeTrack` now fails QA if tracking falls back to file storage.
+Use `-AllowFallback` only for intentional local fallback testing.
+
+Generate and append a weekly metrics snapshot:
+
+```powershell
+./scripts/run-weekly-metrics.ps1 -ApiBase https://api.lowermymedicalbills.com
+```
+
+Run threshold checks (with low-volume safeguards):
+
+```powershell
+./scripts/run-analytics-threshold-check.ps1 -ApiBase https://api.lowermymedicalbills.com
+```
+
+Output log file:
+
+- `docs/analytics_weekly_log.md`
+
+Inspect fallback alert events:
+
+```text
+GET /api/analytics/storage-alerts?days=7
+```
+
+Automated weekly operations workflow:
+
+- `.github/workflows/analytics-weekly-ops.yml`
+
+Run it on demand (manual dispatch):
+
+1. GitHub UI: Actions -> "Analytics Weekly Ops" -> "Run workflow".
+2. GitHub CLI:
+
+```bash
+gh workflow run "Analytics Weekly Ops" --repo buckz1lla/lower-my-medical-bills-api
+```
+
+Set these optional GitHub settings:
+
+- Repository variable: `ANALYTICS_API_BASE` (defaults to `https://api.lowermymedicalbills.com`)
+- Repository secret: `ANALYTICS_API_KEY` (if your analytics endpoints require it)
