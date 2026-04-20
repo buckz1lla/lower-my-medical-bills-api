@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   weekly-metrics-log:
@@ -26,18 +27,16 @@ jobs:
           $apiBase = if ($env:ANALYTICS_API_BASE) { $env:ANALYTICS_API_BASE } else { "https://api.lowermymedicalbills.com" }
           ./scripts/run-weekly-metrics.ps1 -ApiBase $apiBase -AnalyticsApiKey $env:ANALYTICS_API_KEY
 
-      - name: Commit weekly metrics log
-        shell: bash
-        run: |
-          if git diff --quiet -- docs/analytics_weekly_log.md; then
-            echo "No changes to weekly metrics log."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/analytics_weekly_log.md
-          git commit -m "chore: append weekly analytics metrics"
-          git push
+      - name: Open PR for weekly metrics log
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: chore/weekly-analytics-log
+          commit-message: "chore: append weekly analytics metrics"
+          title: "chore: append weekly analytics metrics"
+          body: "Automated weekly metrics log update. Requires Benchmark Release Gate to pass before merge."
+          labels: automated,analytics
+          add-paths: docs/analytics_weekly_log.md
 
   threshold-check:
     name: Threshold Check
