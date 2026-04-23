@@ -722,47 +722,97 @@ def _generate_appeal_recommendations(
     claims: List[schemas.ClaimGroup],
     opportunities: List[schemas.SavingsOpportunity]
 ) -> List[schemas.AppealRecommendation]:
-    """Generate appeal recommendations for claims with calibrated success probabilities."""
+    """
+    Generate action recommendations for all actionable opportunity types:
+      - appeal        → formal internal/external appeal process
+      - balance_billing (NSA) → reprocessing request + CMS complaint pathway
+      - billing_error → provider billing correction or insurer reprocessing request
+    """
     recommendations = []
 
-    # Filter to appeal-type opportunities
-    appeal_opps = [opp for opp in opportunities if opp.type == "appeal"]
+    # Only produce recommendations for opportunity types the user can act on
+    actionable_types = {"appeal", "balance_billing", "billing_error"}
+    actionable_opps = [opp for opp in opportunities if opp.type in actionable_types]
 
-    for opp in appeal_opps:
+    for opp in actionable_opps:
         claim = next((c for c in claims if c.claim_id == opp.claim_id), None)
         if not claim:
             continue
 
-        # Pull calibrated success probability from CARC library if reason code is available;
-        # fall back to the opportunity's own confidence score otherwise.
-        denied_items = [item for item in claim.line_items if item.status == "denied"]
-        success_prob = opp.confidence_score  # default from rule engine
-        for item in denied_items:
-            carc_data = _get_carc_data(item.reason_code)
-            if carc_data:
-                success_prob = carc_data["success_probability"]
-                break
+        if opp.type == "appeal":
+            # Pull calibrated success probability from CARC library when a reason code
+            # is available on a denied line item; fall back to the opportunity's own score.
+            denied_items = [item for item in claim.line_items if item.status == "denied"]
+            success_prob = opp.confidence_score
+            for item in denied_items:
+                carc_data = _get_carc_data(item.reason_code)
+                if carc_data:
+                    success_prob = carc_data["success_probability"]
+                    break
 
-        # Build tailored steps based on opportunity context
-        steps = list(opp.verification_steps) if opp.verification_steps else [
-            "Request Explanation of Benefits (EOB) if not already received",
-            "Gather medical records and documentation supporting medical necessity",
-            "Submit formal written appeal to your insurer with supporting documents",
-            "Follow up if no written response within 30 days",
-            "Request external independent review if internal appeal is denied",
-        ]
-
-        rec = schemas.AppealRecommendation(
-            claim_id=opp.claim_id,
-            reason=f"{opp.description}",
-            success_probability=round(success_prob, 2),
-            steps=steps,
-            contact_info={
+            steps = list(opp.verification_steps) if opp.verification_steps else [
+                "Request Explanation of Benefits (EOB) if not already received",
+                "Gather medical records and documentation supporting medical necessity",
+                "Submit formal written appeal to your insurer with supporting documents",
+                "Follow up if no written response within 30 days",
+                "Request external independent review if internal appeal is denied",
+            ]
+            contact_info = {
                 "provider_name": claim.provider_name,
-                "appeals_department": "See your EOB or insurer's member portal for the appeals mailing address and fax number",
-            },
+                "appeals_department": (
+                    "See your EOB or insurer's member portal for the appeals mailing address and fax number"
+                ),
+            }
+
+        elif opp.type == "balance_billing":
+            # No Surprises Act — reprocessing request + federal complaint pathway
+            success_prob = opp.confidence_score
+            steps = list(opp.verification_steps) if opp.verification_steps else [
+                "Confirm the facility was in-network on the date of service via your insurer's provider directory.",
+                "Contact your insurer and ask them to reprocess this claim under No Surprises Act protections.",
+                "Request a written response within 30 days.",
+                "If the insurer refuses, file a complaint at cms.gov/nosurprises.",
+                "Contact your state insurance commissioner if the federal complaint does not resolve the issue.",
+            ]
+            contact_info = {
+                "provider_name": claim.provider_name,
+                "insurer_member_services": (
+                    "Call the member services number on the back of your insurance card"
+                ),
+                "federal_complaint": "cms.gov/nosurprises — No Surprises Help Desk: 1-800-985-3059",
+            }
+
+        else:
+            # billing_error — reprocessing request directed at provider billing or insurer
+            success_prob = opp.confidence_score
+            steps = list(opp.verification_steps) if opp.verification_steps else [
+                "Request an itemized bill from the provider to confirm the exact charges.",
+                "Contact provider billing and ask them to review and correct the claim.",
+                "If correction requires insurer action, ask the provider to submit a corrected claim.",
+                "Follow up in writing if no response within 14 days.",
+                "Escalate to your insurer's member services if the provider is unresponsive.",
+            ]
+            contact_info = {
+                "provider_name": claim.provider_name,
+                "provider_billing": (
+                    "Call the billing number on your statement or ask the provider's front desk for "
+                    "their billing department contact"
+                ),
+                "insurer_member_services": (
+                    "Call the member services number on the back of your insurance card if the provider "
+                    "does not resolve the issue"
+                ),
+            }
+
+        recommendations.append(
+            schemas.AppealRecommendation(
+                claim_id=opp.claim_id,
+                reason=opp.description,
+                success_probability=round(success_prob, 2),
+                steps=steps,
+                contact_info=contact_info,
+            )
         )
-        recommendations.append(rec)
 
     return recommendations
 
