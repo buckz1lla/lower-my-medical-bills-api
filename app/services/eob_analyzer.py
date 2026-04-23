@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import List
+from typing import List, Optional
 from app import schemas
 import json
 import csv
@@ -37,7 +37,8 @@ async def analyze_eob(
     file_name: str,
     content: bytes,
     file_type: str,
-    analysis_id: str
+    analysis_id: str,
+    user_profile: Optional[schemas.UserProfile] = None,
 ) -> schemas.EOBAnalysis:
     """
     Analyze an EOB file and identify savings opportunities.
@@ -72,7 +73,7 @@ async def analyze_eob(
         )
     
     # Analyze claims for opportunities
-    savings_opportunities = _identify_savings_opportunities(claims)
+    savings_opportunities = _identify_savings_opportunities(claims, user_profile)
     appeal_recommendations = _generate_appeal_recommendations(claims, savings_opportunities)
     
     # Calculate totals
@@ -711,10 +712,11 @@ def _infer_network_status_from_text(text: str):
     return "unknown", "low", evidence, missing_data_points
 
 def _identify_savings_opportunities(
-    claims: List[schemas.ClaimGroup]
+    claims: List[schemas.ClaimGroup],
+    user_profile: Optional[schemas.UserProfile] = None,
 ) -> List[schemas.SavingsOpportunity]:
     """Identify potential savings opportunities in claims via the rule engine."""
-    return evaluate_claims(claims)
+    return evaluate_claims(claims, user_profile)
 
 def _generate_appeal_recommendations(
     claims: List[schemas.ClaimGroup],

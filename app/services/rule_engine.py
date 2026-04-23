@@ -231,7 +231,10 @@ def _apply_data_confidence_guard(raw_score: float, missing_data_points: List[str
     return round(score, 2)
 
 
-def evaluate_claims(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
+def evaluate_claims(
+    claims: List[schemas.ClaimGroup],
+    user_profile: Optional[schemas.UserProfile] = None,
+) -> List[schemas.SavingsOpportunity]:
     """Run all active rules and return savings opportunities."""
     opportunities: List[schemas.SavingsOpportunity] = []
 
@@ -241,6 +244,7 @@ def evaluate_claims(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpp
     opportunities.extend(_rule_no_surprises_act(claims))
     opportunities.extend(_rule_upcoding_signal(claims))
     opportunities.extend(_rule_denied_claim_appeal(claims))
+    opportunities.extend(_rule_deductible_accumulator(claims, user_profile))
 
     return opportunities
 
@@ -461,6 +465,125 @@ def _rule_no_surprises_act(claims: List[schemas.ClaimGroup]) -> List[schemas.Sav
     return opportunities
 
 
+def _rule_deductible_accumulator(
+    claims: List[schemas.ClaimGroup],
+    user_profile: Optional[schemas.UserProfile],
+) -> List[schemas.SavingsOpportunity]:
+    """
+    When the user provides deductible or out-of-pocket accumulator data,
+    check whether cost-sharing charges (PR-1 deductible, PR-2 coinsurance,
+    PR-3 copay) were applied after the accumulator was already fully met.
+    Insurer accumulator tracking errors are common and correctable with
+    a single call to member services plus prior-EOB documentation.
+    """
+    opportunities: List[schemas.SavingsOpportunity] = []
+    if not user_profile:
+        return opportunities
+
+    deductible_full = (
+        user_profile.annual_deductible is not None
+        and user_profile.deductible_met is not None
+        and user_profile.annual_deductible > 0
+        and user_profile.deductible_met >= user_profile.annual_deductible
+    )
+    oop_full = (
+        user_profile.out_of_pocket_max is not None
+        and user_profile.out_of_pocket_spent is not None
+        and user_profile.out_of_pocket_max > 0
+        and user_profile.out_of_pocket_spent >= user_profile.out_of_pocket_max
+    )
+
+    if not deductible_full and not oop_full:
+        return opportunities
+
+    for claim in claims:
+        for item in claim.line_items:
+            if item.patient_responsibility <= 0:
+                continue
+
+            code = _normalize_carc_code(item.reason_code or "")
+            is_deductible_charge = code == "PR-1" and deductible_full
+            is_oop_charge = code in ("PR-2", "PR-3") and oop_full
+
+            if not is_deductible_charge and not is_oop_charge:
+                continue
+
+            if is_deductible_charge:
+                description = (
+                    f"Your annual deductible of {_fmt_usd(user_profile.annual_deductible)} "
+                    f"is shown as fully met ({_fmt_usd(user_profile.deductible_met)}), yet a deductible "
+                    f"charge of {_fmt_usd(item.patient_responsibility)} was applied to: {item.service_description}."
+                )
+                action = (
+                    "Call your insurer and ask them to verify your deductible accumulator balance on the exact "
+                    "date of this service. If the deductible was already met, request claim reprocessing. "
+                    "Have your prior EOBs showing the deductible being fully applied ready before you call."
+                )
+                success_prob = 0.78
+                evidence_line = (
+                    f"User-reported deductible met: {_fmt_usd(user_profile.deductible_met)} "
+                    f"/ {_fmt_usd(user_profile.annual_deductible)}"
+                )
+            else:
+                description = (
+                    f"Your out-of-pocket maximum of {_fmt_usd(user_profile.out_of_pocket_max)} "
+                    f"appears to have been reached ({_fmt_usd(user_profile.out_of_pocket_spent)} spent), yet "
+                    f"cost-sharing of {_fmt_usd(item.patient_responsibility)} was applied to: {item.service_description}."
+                )
+                action = (
+                    "Once your out-of-pocket maximum is met, your insurer must cover 100% of covered in-network "
+                    "services for the remainder of the plan year. Call your insurer, request accumulator "
+                    "verification, and ask for claim reprocessing if your OOP was already exhausted on this date."
+                )
+                success_prob = 0.80
+                evidence_line = (
+                    f"User-reported OOP spent: {_fmt_usd(user_profile.out_of_pocket_spent)} "
+                    f"/ {_fmt_usd(user_profile.out_of_pocket_max)}"
+                )
+
+            missing_data_points = [
+                "Confirmation all prior claims were fully processed before this service date",
+                "Complete EOB history showing cumulative deductible/OOP credits for this plan year",
+            ]
+            score = _apply_data_confidence_guard(success_prob, missing_data_points)
+
+            opportunities.append(
+                schemas.SavingsOpportunity(
+                    opportunity_id=str(uuid.uuid4()),
+                    type="billing_error",
+                    claim_id=claim.claim_id,
+                    severity="critical",
+                    estimated_savings=round(item.patient_responsibility, 2),
+                    description=description,
+                    recommended_action=action,
+                    difficulty_level="easy",
+                    time_estimate_days=14,
+                    confidence_score=score,
+                    confidence_level=_confidence_level(score),
+                    flag_reason=(
+                        "Patient cost-sharing applied after accumulator appears fully met per user-provided plan data."
+                    ),
+                    verification_steps=[
+                        "Pull all EOBs from this plan year showing deductible and OOP credits applied.",
+                        "Log into your insurer's member portal and check the accumulator balance for this plan year.",
+                        "Call member services and ask for the accumulator balance as of the exact date of this service.",
+                        "Request formal claim reprocessing if the accumulator was already at or above the plan limit.",
+                        "File a formal grievance with your EOB history if the insurer disputes the accumulator balance.",
+                    ],
+                    could_be_correct_if=[
+                        "The plan year reset between the accumulator reaching the limit and this service date.",
+                        "This service applies to a separate family-tier deductible with a higher limit.",
+                        "Some costs may have been credited to a different benefit bucket (dental, vision, out-of-network).",
+                    ],
+                    evidence=[
+                        evidence_line,
+                        f"Cost-sharing charge of {_fmt_usd(item.patient_responsibility)} on reason code {code}",
+                    ],
+                    missing_data_points=missing_data_points,
+                )
+            )
+
+    return opportunities
 
 
 def _rule_duplicate_charge(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
