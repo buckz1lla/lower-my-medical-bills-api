@@ -201,6 +201,240 @@ TEST_CASES: List[Dict[str, Any]] = [
         ],
         "notes": "Denial amount <= 100 should not trigger appeal opportunity.",
     },
+    # ------------------------------------------------------------------
+    # CARC reason code analysis rule
+    # ------------------------------------------------------------------
+    {
+        "name": "CARC CO-16 missing info denial",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-009",
+                visit_date=date(2024, 4, 1),
+                in_network=True,
+                provider_name="City Radiology",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 4, 1),
+                        provider_name="City Radiology",
+                        service_description="MRI Brain Without Contrast",
+                        billed_amount=1800.0,
+                        allowed_amount=900.0,
+                        patient_responsibility=450.0,
+                        insurance_paid=450.0,
+                        status="denied",
+                        reason_code="CO-16",
+                    )
+                ],
+            )
+        ],
+        "notes": "CO-16 denied line should trigger reason_code_analysis rule.",
+    },
+    {
+        "name": "CARC CO-45 contractual adjustment — informational only",
+        "expected_flag": False,
+        "claims": [
+            make_claim(
+                claim_id="CLM-010",
+                visit_date=date(2024, 4, 2),
+                in_network=True,
+                provider_name="In-Network Clinic",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 4, 2),
+                        provider_name="In-Network Clinic",
+                        service_description="Office Visit",
+                        billed_amount=300.0,
+                        allowed_amount=120.0,
+                        patient_responsibility=30.0,
+                        insurance_paid=90.0,
+                        status="partial",
+                        reason_code="CO-45",
+                    )
+                ],
+            )
+        ],
+        "notes": "CO-45 is a normal contractual write-off — no actionable opportunity.",
+    },
+    # ------------------------------------------------------------------
+    # Upcoding signal rule
+    # ------------------------------------------------------------------
+    {
+        "name": "Upcoding signal — billed 4x allowed",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-011",
+                visit_date=date(2024, 4, 5),
+                in_network=True,
+                provider_name="Surgical Center",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 4, 5),
+                        provider_name="Surgical Center",
+                        service_description="Laparoscopic Procedure",
+                        billed_amount=4000.0,
+                        allowed_amount=800.0,
+                        patient_responsibility=200.0,
+                        insurance_paid=600.0,
+                        status="partial",
+                        reason_code=None,
+                    )
+                ],
+            )
+        ],
+        "notes": "Billed/allowed ratio of 5x should trigger upcoding_signal rule.",
+    },
+    {
+        "name": "Upcoding signal — ratio below threshold",
+        "expected_flag": False,
+        "claims": [
+            make_claim(
+                claim_id="CLM-012",
+                visit_date=date(2024, 4, 6),
+                in_network=True,
+                provider_name="Family Practice",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 4, 6),
+                        provider_name="Family Practice",
+                        service_description="Office Visit",
+                        billed_amount=500.0,
+                        allowed_amount=250.0,
+                        patient_responsibility=62.0,
+                        insurance_paid=188.0,
+                        status="paid",
+                        reason_code=None,
+                    )
+                ],
+            )
+        ],
+        "notes": "2x ratio is within normal range — upcoding rule should not fire.",
+    },
+    # ------------------------------------------------------------------
+    # No Surprises Act rule
+    # ------------------------------------------------------------------
+    {
+        "name": "NSA — out-of-network emergency room visit",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-013",
+                visit_date=date(2024, 4, 10),
+                in_network=False,
+                provider_name="Metro Emergency Room",
+                network_status="out_of_network",
+                network_confidence="high",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 4, 10),
+                        provider_name="Metro Emergency Room",
+                        service_description="Emergency Room Visit — Level 5",
+                        billed_amount=6000.0,
+                        allowed_amount=1200.0,
+                        patient_responsibility=800.0,
+                        insurance_paid=400.0,
+                        status="partial",
+                        reason_code=None,
+                    )
+                ],
+            )
+        ],
+        "notes": "OON + 'emergency room' keyword + high patient responsibility should trigger NSA rule.",
+    },
+    {
+        "name": "NSA — out-of-network non-emergency scheduled visit",
+        "expected_flag": False,
+        "claims": [
+            make_claim(
+                claim_id="CLM-014",
+                visit_date=date(2024, 4, 11),
+                in_network=False,
+                provider_name="OON Dermatologist",
+                network_status="out_of_network",
+                network_confidence="high",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 4, 11),
+                        provider_name="OON Dermatologist",
+                        service_description="Routine Skin Check",
+                        billed_amount=400.0,
+                        allowed_amount=100.0,
+                        patient_responsibility=100.0,
+                        insurance_paid=0.0,
+                        status="denied",
+                        reason_code="CO-50",
+                    )
+                ],
+            )
+        ],
+        "notes": "OON non-emergency visit should not trigger NSA rule (no emergency keywords). CO-50 reason_code_analysis will fire, so we check type not total.",
+        "expected_types_absent": ["balance_billing"],
+    },
+    # ------------------------------------------------------------------
+    # Deductible accumulator rule
+    # ------------------------------------------------------------------
+    {
+        "name": "Deductible fully met — PR-1 charge applied",
+        "expected_flag": True,
+        "user_profile": schemas.UserProfile(
+            annual_deductible=1500.0,
+            deductible_met=1500.0,
+        ),
+        "claims": [
+            make_claim(
+                claim_id="CLM-015",
+                visit_date=date(2024, 4, 15),
+                in_network=True,
+                provider_name="Regional Hospital",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 4, 15),
+                        provider_name="Regional Hospital",
+                        service_description="Outpatient Surgery",
+                        billed_amount=3000.0,
+                        allowed_amount=1200.0,
+                        patient_responsibility=300.0,
+                        insurance_paid=900.0,
+                        status="partial",
+                        reason_code="PR-1",
+                    )
+                ],
+            )
+        ],
+        "notes": "Deductible fully met; PR-1 charge should trigger accumulator rule.",
+    },
+    {
+        "name": "Deductible not yet met — accumulator rule should not fire",
+        "expected_flag": False,
+        "expected_types_absent": ["billing_error"],
+        "user_profile": schemas.UserProfile(
+            annual_deductible=1500.0,
+            deductible_met=800.0,
+        ),
+        "claims": [
+            make_claim(
+                claim_id="CLM-016",
+                visit_date=date(2024, 4, 16),
+                in_network=True,
+                provider_name="Regional Hospital",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 4, 16),
+                        provider_name="Regional Hospital",
+                        service_description="Office Visit",
+                        billed_amount=300.0,
+                        allowed_amount=120.0,
+                        patient_responsibility=120.0,
+                        insurance_paid=0.0,
+                        status="partial",
+                        reason_code="PR-1",
+                    )
+                ],
+            )
+        ],
+        "notes": "Deductible only 800/1500 met — accumulator billing_error rule should NOT fire. PR-1 reason_code_analysis (appeal) may fire, which is correct.",
+    },
 ]
 
 
@@ -236,8 +470,17 @@ def run_validation() -> Dict[str, Any]:
     tp = fp = fn = tn = 0
 
     for index, case in enumerate(TEST_CASES, start=1):
-        opportunities = _identify_savings_opportunities(case["claims"])
-        fired = len(opportunities) > 0
+        user_profile = case.get("user_profile", None)
+        opportunities = _identify_savings_opportunities(case["claims"], user_profile)
+
+        # Some cases want to assert a specific type is absent (e.g. NSA on non-emergency OON).
+        # expected_flag=False + expected_types_absent=[...] means: those types should NOT fire.
+        # fired=True means one of the absent types incorrectly appeared → FP.
+        if "expected_types_absent" in case:
+            absent_types = set(case["expected_types_absent"])
+            fired = any(opp.type in absent_types for opp in opportunities)
+        else:
+            fired = len(opportunities) > 0
         label = classify_case(case["expected_flag"], fired)
 
         if label == "TP":
