@@ -9,30 +9,6 @@ import re
 from pypdf import PdfReader
 from app.services.rule_engine import evaluate_claims, _get_carc_data
 
-# Simulated database of common billing errors and patterns
-COMMON_BILLING_ERRORS = {
-    "duplicate_charge": {
-        "pattern": "Same service billed multiple times",
-        "savings_potential": 0.8,
-        "difficulty": "easy"
-    },
-    "incorrect_coding": {
-        "pattern": "Procedure coded incorrectly leading to higher charges",
-        "savings_potential": 0.7,
-        "difficulty": "medium"
-    },
-    "balance_billing": {
-        "pattern": "Out-of-network provider billing excess amounts",
-        "savings_potential": 0.6,
-        "difficulty": "hard"
-    },
-    "unbundling": {
-        "pattern": "Procedures that should be bundled billed separately",
-        "savings_potential": 0.75,
-        "difficulty": "medium"
-    }
-}
-
 async def analyze_eob(
     file_name: str,
     content: bytes,
