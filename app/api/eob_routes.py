@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from fastapi.responses import JSONResponse
+import json
 import uuid
 from datetime import date, datetime
 from app import schemas
@@ -36,12 +37,21 @@ async def upload_eob(
         # Generate analysis ID
         analysis_id = str(uuid.uuid4())
         
+        # Parse optional user profile for personalized analysis
+        parsed_profile = None
+        if user_profile:
+            try:
+                parsed_profile = schemas.UserProfile.model_validate(json.loads(user_profile))
+            except Exception:
+                pass  # Invalid profile is non-fatal; analysis runs without it
+
         # Process file (in production, this would be async job)
         analysis = await eob_analyzer.analyze_eob(
             file_name=file.filename,
             content=content,
             file_type=file_ext,
-            analysis_id=analysis_id
+            analysis_id=analysis_id,
+            user_profile=parsed_profile,
         )
         
         # Store analysis
