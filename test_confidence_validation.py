@@ -23,17 +23,20 @@ def make_line_item(
     billed_amount: float,
     status: str = "paid",
     service_date: date | None = None,
+    reason_code: str | None = None,
+    cpt_code: str | None = None,
 ) -> schemas.LineItem:
     return schemas.LineItem(
         service_date=service_date,
         provider_name="Test Provider",
         service_description=service_description,
+        cpt_code=cpt_code,
         billed_amount=billed_amount,
         allowed_amount=billed_amount,
         patient_responsibility=max(0.0, billed_amount * 0.2),
         insurance_paid=max(0.0, billed_amount * 0.8),
         status=status,
-        reason_code=None,
+        reason_code=reason_code,
         notes=None,
     )
 
@@ -434,6 +437,88 @@ TEST_CASES: List[Dict[str, Any]] = [
             )
         ],
         "notes": "Deductible only 800/1500 met — accumulator billing_error rule should NOT fire. PR-1 reason_code_analysis (appeal) may fire, which is correct.",
+    },
+    # ------------------------------------------------------------------
+    # Unbundling rule (CCI edit detection)
+    # ------------------------------------------------------------------
+    {
+        "name": "Unbundling — CPT 93000 and 93005 on same claim",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-017",
+                visit_date=date(2024, 5, 1),
+                in_network=True,
+                provider_name="Cardiology Group",
+                line_items=[
+                    make_line_item("Complete ECG", 250.0, cpt_code="93000"),
+                    make_line_item("ECG Tracing", 80.0, cpt_code="93005"),
+                ],
+            )
+        ],
+        "notes": "93005 is bundled inside 93000 — CCI unbundling rule should fire.",
+    },
+    {
+        "name": "Unbundling — unrelated CPT codes, no CCI pair",
+        "expected_flag": False,
+        "claims": [
+            make_claim(
+                claim_id="CLM-018",
+                visit_date=date(2024, 5, 2),
+                in_network=True,
+                provider_name="Family Practice",
+                line_items=[
+                    make_line_item("Office Visit", 150.0, cpt_code="99213"),
+                    make_line_item("Two-View Chest X-Ray", 200.0, cpt_code="71046"),
+                ],
+            )
+        ],
+        "notes": "99213 + 71046 are not a CCI pair — unbundling rule must not fire. Clean paid in-network claim.",
+    },
+    # ------------------------------------------------------------------
+    # Coordination of Benefits cross-claim rule
+    # ------------------------------------------------------------------
+    {
+        "name": "COB pattern — CO-22 on two separate claims",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-019A",
+                visit_date=date(2024, 5, 10),
+                in_network=True,
+                provider_name="Regional Hospital",
+                line_items=[
+                    make_line_item("Inpatient Surgery", 4000.0, status="denied", reason_code="CO-22"),
+                ],
+            ),
+            make_claim(
+                claim_id="CLM-019B",
+                visit_date=date(2024, 5, 15),
+                in_network=True,
+                provider_name="Regional Hospital",
+                line_items=[
+                    make_line_item("Post-op Follow-up", 350.0, status="denied", reason_code="CO-22"),
+                ],
+            ),
+        ],
+        "notes": "CO-22 on 2 claims should trigger coordination_of_benefits cross-claim rule.",
+    },
+    {
+        "name": "COB single claim — cross-claim rule should not fire",
+        "expected_flag": False,
+        "expected_types_absent": ["coordination_of_benefits"],
+        "claims": [
+            make_claim(
+                claim_id="CLM-020",
+                visit_date=date(2024, 5, 20),
+                in_network=True,
+                provider_name="Specialist Office",
+                line_items=[
+                    make_line_item("Specialist Visit", 600.0, status="denied", reason_code="CO-22"),
+                ],
+            )
+        ],
+        "notes": "Single CO-22 claim — reason_code_analysis fires (correct) but coordination_of_benefits cross-claim rule must NOT fire.",
     },
 ]
 
