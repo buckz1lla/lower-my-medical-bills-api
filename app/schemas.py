@@ -94,8 +94,6 @@ class EOBUploadResponse(BaseModel):
     file_name: str
     status: str  # "processing", "completed", "error"
 
-# ===== USER CONTEXT SCHEMAS =====
-
 # ===== CARC LOOKUP SCHEMAS =====
 
 class CARCEntry(BaseModel):
