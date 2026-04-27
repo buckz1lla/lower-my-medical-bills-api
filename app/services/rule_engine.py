@@ -229,6 +229,28 @@ _NSA_EMERGENCY_KEYWORDS = [
     "ems", "trauma", "critical care", "emergency services",
 ]
 
+# ---------------------------------------------------------------------------
+# CCI Edit Pairs (Correct Coding Initiative)
+# Source: CMS National Correct Coding Initiative Policy Manual
+# When both CPT codes in a pair appear on the same claim the component code
+# is already bundled into the comprehensive code — billing both is unbundling.
+# Each entry: (comprehensive_code, component_code, reason)
+# ---------------------------------------------------------------------------
+CCI_EDIT_PAIRS = [
+    ("93000", "93005", "Complete ECG (93000) already includes the ECG tracing component (93005). The tracing cannot be billed separately."),
+    ("93000", "93010", "Complete ECG (93000) already includes the interpretation component (93010). The interpretation cannot be billed separately."),
+    ("85025", "85027", "CBC with differential (85025) already includes CBC without differential (85027) — only one can be billed."),
+    ("81003", "81001", "Automated urinalysis (81003) already includes non-automated urinalysis (81001) — only one can be billed."),
+    ("36415", "36000", "Routine venipuncture (36415) cannot be billed with IV catheter placement (36000) for the same access site."),
+    ("71046", "71045", "Two-view chest X-ray (71046) already includes the single-view chest X-ray (71045)."),
+    ("45380", "45378", "Colonoscopy with biopsy (45380) already includes diagnostic colonoscopy (45378)."),
+    ("43239", "43235", "Upper GI endoscopy with biopsy (43239) already includes diagnostic upper GI endoscopy (43235)."),
+    ("27447", "27310", "Total knee arthroplasty (27447) already includes knee manipulation (27310) when performed in the same operative session."),
+    ("27447", "27331", "Total knee arthroplasty (27447) already includes knee arthroscopy (27331) when performed in the same operative session."),
+    ("27130", "27125", "Total hip arthroplasty (27130) already includes partial hip arthroplasty (27125) — only one can be billed per session."),
+    ("99213", "99000", "Office E/M visit (99213) already includes specimen handling — billing 99000 separately is a common unbundling error."),
+]
+
 
 def _normalize_carc_code(raw_code: str) -> str:
     """Normalize a raw reason code string to a CARC library key (e.g. '45' -> 'CO-45')."""
@@ -313,6 +335,8 @@ def evaluate_claims(
     opportunities.extend(_rule_upcoding_signal(claims))
     opportunities.extend(_rule_denied_claim_appeal(claims))
     opportunities.extend(_rule_deductible_accumulator(claims, user_profile))
+    opportunities.extend(_rule_unbundling(claims))
+    opportunities.extend(_rule_coordination_of_benefits(claims))
 
     return opportunities
 
@@ -826,5 +850,162 @@ def _rule_denied_claim_appeal(claims: List[schemas.ClaimGroup]) -> List[schemas.
                     **_appeal_deadline_fields(claim.visit_date),
                 )
             )
+
+    return opportunities
+
+
+def _rule_unbundling(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
+    """
+    CCI (Correct Coding Initiative) unbundling detection.
+    When both CPT codes of a CCI edit pair appear on the same claim,
+    the component code is already included in the comprehensive code
+    and should not be billed separately.
+    Requires cpt_code field on LineItem to operate; claims without CPT codes are skipped.
+    """
+    opportunities: List[schemas.SavingsOpportunity] = []
+
+    for claim in claims:
+        # Map CPT code → line items for that code
+        cpt_to_items: dict = {}
+        for item in claim.line_items:
+            if item.cpt_code:
+                key = item.cpt_code.strip().upper()
+                cpt_to_items.setdefault(key, []).append(item)
+
+        if len(cpt_to_items) < 2:
+            continue
+
+        for comp_code, component_code, reason in CCI_EDIT_PAIRS:
+            if comp_code not in cpt_to_items or component_code not in cpt_to_items:
+                continue
+
+            component_items = cpt_to_items[component_code]
+            component_billed = sum(item.billed_amount for item in component_items)
+
+            missing_data_points = [
+                "Modifier -59 or X-modifier documentation (may legitimately allow separate billing)",
+                "Operative note confirming distinct service or separate anatomical site",
+            ]
+            score = _apply_data_confidence_guard(0.74, missing_data_points)
+            opportunities.append(
+                schemas.SavingsOpportunity(
+                    opportunity_id=str(uuid.uuid4()),
+                    type="billing_error",
+                    claim_id=claim.claim_id,
+                    severity="high",
+                    estimated_savings=component_billed * 0.85,
+                    description=(
+                        f"Possible CCI unbundling: CPT {comp_code} (comprehensive) and "
+                        f"CPT {component_code} (component) appear on the same claim."
+                    ),
+                    recommended_action=(
+                        f"Request an itemized bill and verify whether modifier -59 is present on CPT {component_code}. "
+                        f"If no modifier: ask your provider billing office to remove the component code and resubmit. "
+                        f"The insurer should automatically include {component_code} in the allowance for {comp_code}."
+                    ),
+                    difficulty_level="medium",
+                    time_estimate_days=21,
+                    confidence_score=score,
+                    confidence_level=_confidence_level(score),
+                    flag_reason=reason,
+                    verification_steps=[
+                        f"Obtain itemized bill confirming both CPT {comp_code} and CPT {component_code} are listed.",
+                        "Check whether modifier -59, XU, XE, XP, or XS is appended to the component code.",
+                        "If no modifier: contact provider billing and request removal of the component code.",
+                        "If modifier is present and services were distinct: document clearly for insurer review.",
+                    ],
+                    could_be_correct_if=[
+                        "Modifier -59 or an X-modifier is attached confirming a distinct procedural service.",
+                        "Services were performed at separate anatomical sites or in different operative sessions.",
+                    ],
+                    evidence=[
+                        f"CPT {comp_code} (comprehensive) and CPT {component_code} (component) both found on claim {claim.claim_id}",
+                        f"CMS CCI edit prohibits separate billing of {component_code} when {comp_code} is also billed",
+                    ],
+                    missing_data_points=missing_data_points,
+                    **_appeal_deadline_fields(claim.visit_date),
+                )
+            )
+
+    return opportunities
+
+
+def _rule_coordination_of_benefits(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
+    """
+    Coordination of Benefits (COB) cross-claim pattern detection.
+    When CO-22 appears on 2 or more distinct claims it signals a systemic
+    payer-order dispute rather than an isolated denial.
+    Single-claim CO-22 is already handled by _rule_reason_code_analysis.
+    """
+    opportunities: List[schemas.SavingsOpportunity] = []
+
+    co22_claims = [
+        claim for claim in claims
+        if any(
+            _normalize_carc_code(item.reason_code or "") == "CO-22"
+            for item in claim.line_items
+        )
+    ]
+
+    if len(co22_claims) < 2:
+        return opportunities
+
+    affected_ids = [c.claim_id for c in co22_claims]
+    total_at_risk = sum(
+        item.patient_responsibility
+        for claim in co22_claims
+        for item in claim.line_items
+        if _normalize_carc_code(item.reason_code or "") == "CO-22"
+    )
+
+    missing_data_points = [
+        "Secondary insurance policy details",
+        "COB determination letter from primary insurer",
+    ]
+    score = _apply_data_confidence_guard(0.68, missing_data_points)
+    opportunities.append(
+        schemas.SavingsOpportunity(
+            opportunity_id=str(uuid.uuid4()),
+            type="coordination_of_benefits",
+            claim_id=co22_claims[0].claim_id,
+            severity="high",
+            estimated_savings=total_at_risk * 0.70,
+            description=(
+                f"CO-22 (Coordination of Benefits) appears on {len(co22_claims)} separate claims "
+                f"({', '.join(affected_ids)}), indicating a systemic payer-order dispute."
+            ),
+            recommended_action=(
+                "Contact your insurer's COB department and request a formal COB determination letter. "
+                "If you have only one active policy, submit written confirmation. "
+                "If you have dual coverage, verify primary/secondary order with both insurers and "
+                "refile denied claims with the correct primary payer. "
+                "A single COB resolution typically corrects all affected claims at once."
+            ),
+            difficulty_level="medium",
+            time_estimate_days=21,
+            confidence_score=score,
+            confidence_level=_confidence_level(score),
+            flag_reason=(
+                f"CO-22 (COB dispute) detected on {len(co22_claims)} claims — "
+                "systemic pattern, not an isolated denial."
+            ),
+            verification_steps=[
+                "List all EOBs with CO-22 and collect claim numbers and service dates.",
+                "Confirm with your employer HR or insurance broker whether dual coverage exists.",
+                "Request a COB determination letter from your primary insurer.",
+                "Resubmit affected claims to the correct primary payer once COB order is confirmed.",
+            ],
+            could_be_correct_if=[
+                "You were covered under two insurance plans during the service dates.",
+                "A prior insurance plan was still active and should have been billed first.",
+            ],
+            evidence=[
+                f"CO-22 found on claims: {', '.join(affected_ids)}",
+                f"Total patient responsibility at risk: {_fmt_usd(total_at_risk)}",
+            ],
+            missing_data_points=missing_data_points,
+            **_appeal_deadline_fields(co22_claims[0].visit_date),
+        )
+    )
 
     return opportunities
