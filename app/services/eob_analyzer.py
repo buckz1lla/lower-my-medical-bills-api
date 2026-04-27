@@ -707,7 +707,7 @@ def _generate_appeal_recommendations(
     recommendations = []
 
     # Only produce recommendations for opportunity types the user can act on
-    actionable_types = {"appeal", "balance_billing", "billing_error"}
+    actionable_types = {"appeal", "balance_billing", "billing_error", "coordination_of_benefits"}
     actionable_opps = [opp for opp in opportunities if opp.type in actionable_types]
 
     for opp in actionable_opps:
@@ -758,7 +758,7 @@ def _generate_appeal_recommendations(
                 "federal_complaint": "cms.gov/nosurprises — No Surprises Help Desk: 1-800-985-3059",
             }
 
-        else:
+        elif opp.type == "billing_error":
             # billing_error — reprocessing request directed at provider billing or insurer
             success_prob = opp.confidence_score
             steps = list(opp.verification_steps) if opp.verification_steps else [
@@ -779,6 +779,30 @@ def _generate_appeal_recommendations(
                     "does not resolve the issue"
                 ),
             }
+
+        elif opp.type == "coordination_of_benefits":
+            # COB payer-order dispute — systemic fix via insurer member services
+            success_prob = opp.confidence_score
+            steps = list(opp.verification_steps) if opp.verification_steps else [
+                "Call the member services number on the back of your primary insurance card.",
+                "Explain that multiple claims have been denied with reason code CO-22 (other payer primary).",
+                "Ask your insurer to confirm which plan is primary on record and verify the coordination-of-benefits order.",
+                "If the payer order is wrong, request that they update your COB information and reprocess all affected claims.",
+                "Ask for a case number and expected resolution timeline; follow up in writing if no response within 30 days.",
+                "If your insurer refuses to reprocess, contact your employer HR or benefits administrator — they can often intervene directly with the insurer.",
+            ]
+            contact_info = {
+                "primary_insurer_member_services": (
+                    "Call the member services number on the back of your primary insurance card"
+                ),
+                "employer_hr": (
+                    "Contact your employer HR or benefits administrator if your coverage is employer-sponsored"
+                ),
+            }
+
+        else:
+            # Fallback — should not be reached given actionable_types guard above
+            continue
 
         recommendations.append(
             schemas.AppealRecommendation(
