@@ -9,6 +9,7 @@ class LineItem(BaseModel):
     service_date: Optional[date] = None
     provider_name: str
     service_description: str
+    cpt_code: Optional[str] = None  # CPT/HCPCS procedure code for more precise duplicate detection
     billed_amount: float
     allowed_amount: float
     patient_responsibility: float
