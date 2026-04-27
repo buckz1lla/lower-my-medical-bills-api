@@ -58,6 +58,8 @@ class SavingsOpportunity(BaseModel):
     verification_steps: List[str]
     could_be_correct_if: List[str]
     missing_data_points: List[str]
+    appeal_deadline: Optional[date] = None  # 180 days from visit date; None when date unavailable
+    appeal_deadline_note: Optional[str] = None  # Human-readable urgency message
 
 class AppealRecommendation(BaseModel):
     """Recommendation for appealing a claim"""

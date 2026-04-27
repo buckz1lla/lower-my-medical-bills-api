@@ -1,5 +1,6 @@
 import re
 import uuid
+from datetime import date, timedelta
 from typing import List, Optional
 
 from app import schemas
@@ -221,6 +222,28 @@ def _confidence_level(score: float) -> str:
     return "low"
 
 
+def _appeal_deadline_fields(visit_date: Optional[date]) -> dict:
+    """
+    Calculate the standard 180-day appeal deadline from the visit date and
+    return a dict suitable for spreading into SavingsOpportunity kwargs.
+    Returns empty dict when visit_date is unavailable.
+    """
+    if not visit_date:
+        return {}
+    deadline = visit_date + timedelta(days=180)
+    today = date.today()
+    days_left = (deadline - today).days
+    if days_left < 0:
+        note = f"Appeal window closed {abs(days_left)} day(s) ago — external review may still be available."
+    elif days_left <= 14:
+        note = f"URGENT: Appeal deadline is {deadline.strftime('%B %d, %Y')} — only {days_left} day(s) remaining."
+    elif days_left <= 45:
+        note = f"Act soon: Appeal deadline is {deadline.strftime('%B %d, %Y')} ({days_left} days remaining)."
+    else:
+        note = f"Appeal deadline: {deadline.strftime('%B %d, %Y')} ({days_left} days remaining)."
+    return {"appeal_deadline": deadline, "appeal_deadline_note": note}
+
+
 def _apply_data_confidence_guard(raw_score: float, missing_data_points: List[str]) -> float:
     # When key plan-state fields are missing, downgrade certainty to avoid overconfident guidance.
     score = raw_score
@@ -245,222 +268,6 @@ def evaluate_claims(
     opportunities.extend(_rule_upcoding_signal(claims))
     opportunities.extend(_rule_denied_claim_appeal(claims))
     opportunities.extend(_rule_deductible_accumulator(claims, user_profile))
-
-    return opportunities
-
-
-def _rule_reason_code_analysis(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
-    """
-    Map X12 CARC/RARC denial reason codes on denied or partial line items to
-    specific, calibrated guidance. This is the core IP of the rule engine —
-    every reason code produces a tailored explanation and action rather than
-    a generic 'claim denied' message.
-    """
-    opportunities: List[schemas.SavingsOpportunity] = []
-
-    for claim in claims:
-        for item in claim.line_items:
-            if item.status not in ("denied", "partial"):
-                continue
-            carc_data = _get_carc_data(item.reason_code)
-            if not carc_data:
-                continue
-            # CO-45 contractual adjustments are informational — not actionable savings
-            if carc_data["category"] == "informational":
-                continue
-
-            normalized_code = _normalize_carc_code(item.reason_code)
-            estimated_savings = (
-                item.patient_responsibility
-                if item.patient_responsibility > 0
-                else round(item.billed_amount * 0.6, 2)
-            )
-            missing_data_points = list(claim.missing_data_points or [])
-            score = _apply_data_confidence_guard(carc_data["success_probability"], missing_data_points)
-
-            opportunities.append(
-                schemas.SavingsOpportunity(
-                    opportunity_id=str(uuid.uuid4()),
-                    type=carc_data["category"],
-                    claim_id=claim.claim_id,
-                    severity=carc_data["severity"],
-                    estimated_savings=round(estimated_savings, 2),
-                    description=f"Denial code {normalized_code}: {carc_data['explanation']}",
-                    recommended_action=carc_data["action"],
-                    difficulty_level=carc_data["difficulty_level"],
-                    time_estimate_days=carc_data["time_estimate_days"],
-                    confidence_score=score,
-                    confidence_level=_confidence_level(score),
-                    flag_reason=f"Reason code {normalized_code} found on a {item.status} line item for: {item.service_description}",
-                    verification_steps=[
-                        f"Pull the full denial notice for claim {claim.claim_id} from your insurer's member portal.",
-                        "Confirm the reason code on your paper EOB matches this code exactly.",
-                        "Request an itemized bill from the provider if not already in hand.",
-                        "Note the appeal deadline on your EOB — most plans allow 180 days from denial date.",
-                    ],
-                    could_be_correct_if=[
-                        "The code was applied per your plan's standard benefit design for this service type.",
-                        "You have already received a prior written determination that this denial is final.",
-                    ],
-                    evidence=[
-                        f"Reason code {normalized_code} on {item.status} line item",
-                        f"Service: {item.service_description} — Patient responsibility: {_fmt_usd(item.patient_responsibility)}",
-                    ],
-                    missing_data_points=missing_data_points,
-                )
-            )
-
-    return opportunities
-
-
-def _rule_upcoding_signal(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
-    """
-    Flag line items where the billed-to-allowed ratio is anomalously high.
-    A ratio above 3.5x is a potential upcoding or fee-schedule error signal
-    worth requesting provider justification for.
-    """
-    RATIO_THRESHOLD = 3.5
-    MIN_BILLED = 300.0
-    MIN_PATIENT_RESP = 50.0
-    opportunities: List[schemas.SavingsOpportunity] = []
-
-    for claim in claims:
-        for item in claim.line_items:
-            if item.allowed_amount <= 0 or item.billed_amount < MIN_BILLED:
-                continue
-            if item.patient_responsibility < MIN_PATIENT_RESP:
-                continue
-            # CO-45 items are expected to have high ratios — skip
-            if item.reason_code and _normalize_carc_code(item.reason_code) == "CO-45":
-                continue
-
-            ratio = item.billed_amount / item.allowed_amount
-            if ratio < RATIO_THRESHOLD:
-                continue
-
-            missing_data_points = [
-                "CMS Medicare fee schedule rate for this CPT code and region",
-                "Provider's explanation for billing above the allowed amount",
-            ]
-            score = _apply_data_confidence_guard(0.60, missing_data_points)
-
-            opportunities.append(
-                schemas.SavingsOpportunity(
-                    opportunity_id=str(uuid.uuid4()),
-                    type="billing_error",
-                    claim_id=claim.claim_id,
-                    severity="medium",
-                    estimated_savings=round(item.patient_responsibility * 0.5, 2),
-                    description=(
-                        f"Billed amount ({_fmt_usd(item.billed_amount)}) is {ratio:.1f}x the allowed amount "
-                        f"({_fmt_usd(item.allowed_amount)}) for: {item.service_description}"
-                    ),
-                    recommended_action=(
-                        "Request an itemized bill and ask the provider's billing office to justify the "
-                        "billed-to-allowed ratio. Compare against the CMS Medicare fee schedule for this "
-                        "service code at cms.gov/medicare/payment-systems."
-                    ),
-                    difficulty_level="medium",
-                    time_estimate_days=21,
-                    confidence_score=score,
-                    confidence_level=_confidence_level(score),
-                    flag_reason=f"Billed-to-allowed ratio of {ratio:.1f}x exceeds the expected range for typical claims.",
-                    verification_steps=[
-                        "Request an itemized bill from the provider with procedure (CPT) codes for each line.",
-                        "Look up the CMS Medicare fee schedule for this CPT code at cms.gov.",
-                        "If the allowed amount already reflects a fee-schedule rate, ask the provider why the billed amount is so far above it.",
-                        "Ask provider billing: 'Can you explain the discrepancy between the billed and allowed amounts on this line?'",
-                    ],
-                    could_be_correct_if=[
-                        "The procedure involved specialized equipment or unusually complex circumstances.",
-                        "Multiple service components were bundled into a single line description.",
-                        "The allowed amount reflects a deep contractual discount unrelated to Medicare rates.",
-                    ],
-                    evidence=[
-                        f"Billed: {_fmt_usd(item.billed_amount)} / Allowed: {_fmt_usd(item.allowed_amount)} = {ratio:.1f}x ratio",
-                        f"Service: {item.service_description}",
-                    ],
-                    missing_data_points=missing_data_points,
-                )
-            )
-
-    return opportunities
-
-
-def _rule_no_surprises_act(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
-    """
-    Detect out-of-network claims with emergency-care indicators that may be
-    protected under the No Surprises Act (effective Jan 1, 2022). Under the NSA,
-    out-of-network providers at in-network facilities generally cannot charge
-    patients more than in-network cost-sharing for emergency services.
-    """
-    opportunities: List[schemas.SavingsOpportunity] = []
-
-    for claim in claims:
-        if claim.network_status != "out_of_network":
-            continue
-        if claim.total_patient_responsibility <= 100:
-            continue
-
-        text_to_scan = " ".join([
-            claim.facility_name or "",
-            claim.provider_name or "",
-            *[item.service_description for item in claim.line_items],
-        ]).lower()
-
-        is_likely_emergency = any(kw in text_to_scan for kw in _NSA_EMERGENCY_KEYWORDS)
-        if not is_likely_emergency:
-            continue
-
-        missing_data_points = [
-            "Confirmation that the facility itself was in-network on the date of service",
-            "Signed Notice and Consent waiver (if any) for this provider",
-        ]
-        score = _apply_data_confidence_guard(0.73, missing_data_points)
-
-        opportunities.append(
-            schemas.SavingsOpportunity(
-                opportunity_id=str(uuid.uuid4()),
-                type="balance_billing",
-                claim_id=claim.claim_id,
-                severity="critical",
-                estimated_savings=round(claim.total_patient_responsibility * 0.70, 2),
-                description=(
-                    f"Out-of-network emergency service at {claim.facility_name or claim.provider_name} "
-                    f"may be protected under the No Surprises Act. Patient responsibility of "
-                    f"{_fmt_usd(claim.total_patient_responsibility)} may be reducible to in-network cost-sharing."
-                ),
-                recommended_action=(
-                    "Under the No Surprises Act (effective Jan 2022), out-of-network providers at in-network "
-                    "facilities cannot bill you more than in-network cost-sharing for emergency services. "
-                    "Contact your insurer and ask them to reprocess this claim under NSA protections. "
-                    "You can also file a complaint at cms.gov/nosurprises."
-                ),
-                difficulty_level="medium",
-                time_estimate_days=30,
-                confidence_score=score,
-                confidence_level=_confidence_level(score),
-                flag_reason="Out-of-network claim with emergency-service indicators may qualify for No Surprises Act patient protections.",
-                verification_steps=[
-                    "Confirm the facility (hospital or ER building) itself was in-network on the service date — call your insurer's provider directory.",
-                    "Ask your insurer: 'Does the No Surprises Act apply to this claim?' and request a written response.",
-                    "Check whether you signed a Notice and Consent form agreeing to out-of-network rates before the service.",
-                    "If NSA applies, you should owe only your in-network deductible/coinsurance/copay — not the full out-of-network rate.",
-                    "File a complaint at cms.gov/nosurprises if insurer refuses to apply NSA protections.",
-                ],
-                could_be_correct_if=[
-                    "You received and signed a Notice and Consent form before service, voluntarily waiving NSA protections.",
-                    "The facility itself (not just the provider) was also out-of-network.",
-                    "The service was non-emergency scheduled care, not covered under NSA emergency provisions.",
-                ],
-                evidence=[
-                    "Claim network_status is out_of_network",
-                    "Service description contains emergency-care keywords",
-                    f"Patient responsibility of {_fmt_usd(claim.total_patient_responsibility)} above NSA review threshold",
-                ],
-                missing_data_points=missing_data_points,
-            )
-        )
 
     return opportunities
 
@@ -580,6 +387,7 @@ def _rule_deductible_accumulator(
                         f"Cost-sharing charge of {_fmt_usd(item.patient_responsibility)} on reason code {code}",
                     ],
                     missing_data_points=missing_data_points,
+                    **_appeal_deadline_fields(claim.visit_date),
                 )
             )
 
@@ -644,6 +452,7 @@ def _rule_reason_code_analysis(claims: List[schemas.ClaimGroup]) -> List[schemas
                         f"Service: {item.service_description} — Patient responsibility: {_fmt_usd(item.patient_responsibility)}",
                     ],
                     missing_data_points=missing_data_points,
+                    **_appeal_deadline_fields(claim.visit_date),
                 )
             )
 
@@ -718,6 +527,7 @@ def _rule_upcoding_signal(claims: List[schemas.ClaimGroup]) -> List[schemas.Savi
                         f"Service: {item.service_description}",
                     ],
                     missing_data_points=missing_data_points,
+                    **_appeal_deadline_fields(claim.visit_date),
                 )
             )
 
@@ -796,6 +606,7 @@ def _rule_no_surprises_act(claims: List[schemas.ClaimGroup]) -> List[schemas.Sav
                     f"Patient responsibility of {_fmt_usd(claim.total_patient_responsibility)} above NSA review threshold",
                 ],
                 missing_data_points=missing_data_points,
+                **_appeal_deadline_fields(claim.visit_date),
             )
         )
 
@@ -848,6 +659,7 @@ def _rule_duplicate_charge(claims: List[schemas.ClaimGroup]) -> List[schemas.Sav
                         "Billed amount pattern suggests potential duplicate billing",
                     ],
                     missing_data_points=missing_data_points,
+                    **_appeal_deadline_fields(claim.visit_date),
                 )
             )
 
@@ -904,6 +716,7 @@ def _rule_out_of_network(claims: List[schemas.ClaimGroup]) -> List[schemas.Savin
                     "Patient responsibility is elevated relative to allowed amount",
                 ],
                 missing_data_points=missing_data_points,
+                **_appeal_deadline_fields(claim.visit_date),
             )
         )
 
@@ -959,6 +772,7 @@ def _rule_denied_claim_appeal(claims: List[schemas.ClaimGroup]) -> List[schemas.
                         "Denied line billed amount is above review threshold",
                     ],
                     missing_data_points=missing_data_points,
+                    **_appeal_deadline_fields(claim.visit_date),
                 )
             )
 
