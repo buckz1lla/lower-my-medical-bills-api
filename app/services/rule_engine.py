@@ -40,6 +40,15 @@ CARC_CODE_LIBRARY = {
         "severity": "high",
         "category": "billing_error",
     },
+    "CO-18": {
+        "explanation": "Exact duplicate claim or service. This claim was identified as a duplicate of a previously submitted or adjudicated claim.",
+        "action": "Confirm with your provider billing office that this is not a system-generated duplicate submission. If both services were genuinely separate encounters, ask the provider to resubmit with distinct dates, service descriptions, or line-item details that differentiate them. If it is a true duplicate, no additional payment is owed.",
+        "success_probability": 0.60,
+        "difficulty_level": "easy",
+        "time_estimate_days": 14,
+        "severity": "medium",
+        "category": "billing_error",
+    },
     "CO-22": {
         "explanation": "This care may be covered by another payer per coordination of benefits (COB). Insurer believes you have another insurance policy that should pay first.",
         "action": "If you have only one insurance plan, send your insurer written confirmation. If you have dual coverage, verify the correct primary/secondary payer order with both insurers. File with the correct primary payer first.",
@@ -48,6 +57,24 @@ CARC_CODE_LIBRARY = {
         "time_estimate_days": 21,
         "severity": "medium",
         "category": "billing_error",
+    },
+    "CO-26": {
+        "explanation": "Expenses were incurred prior to your coverage effective date. The service date precedes the date your insurance coverage began.",
+        "action": "Verify your coverage effective date with your insurer. If you were covered under a prior plan on the date of service, submit to that prior insurer. If the claim date is incorrect, ask your provider to resubmit a corrected claim with the accurate service date. If a coverage gap exists due to a qualifying life event, check whether retroactive coverage applies.",
+        "success_probability": 0.35,
+        "difficulty_level": "hard",
+        "time_estimate_days": 30,
+        "severity": "high",
+        "category": "appeal",
+    },
+    "CO-27": {
+        "explanation": "Expenses were incurred after your coverage was terminated. The service date falls after the date your insurance coverage ended.",
+        "action": "Verify your coverage termination date with your insurer. Check whether COBRA or continuation coverage was elected — COBRA coverage can be retroactive if elected within 60 days. If the claim date is wrong, request a corrected claim from your provider. If coverage lapsed due to employer error, contact your HR department immediately.",
+        "success_probability": 0.30,
+        "difficulty_level": "hard",
+        "time_estimate_days": 30,
+        "severity": "high",
+        "category": "appeal",
     },
     "CO-29": {
         "explanation": "Timely filing limit has been exceeded. Claims must typically be filed within 90–365 days of the service date depending on the plan.",
@@ -71,6 +98,24 @@ CARC_CODE_LIBRARY = {
         "explanation": "Non-covered service. This procedure is not a covered benefit under your current plan.",
         "action": "Pull your plan's Summary of Benefits and Coverage (SBC) and locate the exclusion that applies. If the exclusion does not clearly apply, file an appeal citing medical necessity and plan ambiguity. Ask your provider if an alternative covered procedure achieves the same clinical outcome.",
         "success_probability": 0.30,
+        "difficulty_level": "hard",
+        "time_estimate_days": 45,
+        "severity": "high",
+        "category": "appeal",
+    },
+    "CO-55": {
+        "explanation": "Claim denied due to a pre-existing condition exclusion. Your plan determined this condition existed before your coverage effective date and is subject to an exclusion period.",
+        "action": "Important: Pre-existing condition exclusions are prohibited for most ACA-compliant plans (marketplace and employer group plans since 2014). If your plan is ACA-compliant, file an immediate appeal citing ACA Section 2704. If your plan is grandfathered or a short-term limited-duration plan, review the exclusion period in your plan documents and verify it has not yet elapsed. Request the specific exclusion clause in writing.",
+        "success_probability": 0.65,
+        "difficulty_level": "medium",
+        "time_estimate_days": 30,
+        "severity": "high",
+        "category": "appeal",
+    },
+    "CO-58": {
+        "explanation": "Claim denied because the treatment or procedure was deemed experimental or investigational by your insurer. The insurer considers this service to lack sufficient clinical evidence for the indicated use.",
+        "action": "Request the specific clinical policy and coverage determination criteria your insurer applied. Obtain a detailed letter of medical necessity from your physician that includes peer-reviewed clinical literature supporting the treatment for your diagnosis. Many experimental denials are successfully overturned with physician attestation and published evidence. Request an independent external medical review if your internal appeal is denied.",
+        "success_probability": 0.45,
         "difficulty_level": "hard",
         "time_estimate_days": 45,
         "severity": "high",
@@ -619,9 +664,15 @@ def _rule_duplicate_charge(claims: List[schemas.ClaimGroup]) -> List[schemas.Sav
     opportunities: List[schemas.SavingsOpportunity] = []
     service_descriptions = {}
 
+    def _dup_key(visit_date: date, item: schemas.LineItem) -> tuple:
+        """Match on CPT code + date when available; fall back to normalised description."""
+        if item.cpt_code:
+            return (visit_date, "cpt", item.cpt_code.strip().upper())
+        return (visit_date, "desc", item.service_description.strip().lower())
+
     for claim in claims:
         for item in claim.line_items:
-            key = (claim.visit_date, item.service_description)
+            key = _dup_key(claim.visit_date, item)
             if key not in service_descriptions:
                 service_descriptions[key] = item
                 continue

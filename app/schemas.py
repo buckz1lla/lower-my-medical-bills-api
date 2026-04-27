@@ -9,6 +9,7 @@ class LineItem(BaseModel):
     service_date: Optional[date] = None
     provider_name: str
     service_description: str
+    cpt_code: Optional[str] = None  # CPT/HCPCS procedure code for more precise duplicate detection
     billed_amount: float
     allowed_amount: float
     patient_responsibility: float
@@ -92,6 +93,26 @@ class EOBUploadResponse(BaseModel):
     analysis_id: str
     file_name: str
     status: str  # "processing", "completed", "error"
+
+# ===== USER CONTEXT SCHEMAS =====
+
+# ===== CARC LOOKUP SCHEMAS =====
+
+class CARCEntry(BaseModel):
+    """X12 Claim Adjustment Reason Code (CARC) library entry"""
+    code: str
+    explanation: str
+    action: str
+    success_probability: float
+    difficulty_level: str  # "easy", "medium", "hard"
+    time_estimate_days: int
+    severity: str  # "low", "medium", "high", "critical"
+    category: str  # "billing_error", "appeal", "informational"
+
+class CARCListResponse(BaseModel):
+    """Response for CARC library listing"""
+    total: int
+    codes: List[CARCEntry]
 
 # ===== USER CONTEXT SCHEMAS =====
 
