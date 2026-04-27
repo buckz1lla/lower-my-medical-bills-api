@@ -3,8 +3,10 @@ from fastapi.responses import JSONResponse
 import json
 import uuid
 from datetime import date, datetime
+from typing import Optional
 from app import schemas
 from app.services import eob_analyzer
+from app.services.rule_engine import CARC_CODE_LIBRARY, _normalize_carc_code
 from app.store import eob_analyses, initialize_analysis_payment, payment_status_by_analysis
 
 router = APIRouter()
@@ -127,6 +129,39 @@ async def get_opportunity_details(analysis_id: str, opportunity_id: str):
             }
     
     raise HTTPException(status_code=404, detail="Opportunity not found")
+
+
+@router.get("/carc-lookup", response_model=schemas.CARCListResponse)
+async def list_carc_codes(category: Optional[str] = Query(None, description="Filter by category: billing_error | appeal | informational")):
+    """
+    List all X12 CARC codes in the knowledge base.
+    Optionally filter by category: billing_error, appeal, informational.
+    """
+    entries = [
+        schemas.CARCEntry(code=code, **data)
+        for code, data in CARC_CODE_LIBRARY.items()
+    ]
+    if category:
+        entries = [e for e in entries if e.category == category]
+    return schemas.CARCListResponse(total=len(entries), codes=entries)
+
+
+@router.get("/carc-lookup/{code}", response_model=schemas.CARCEntry)
+async def lookup_carc_code(code: str):
+    """
+    Look up a single CARC code by its identifier.
+    Accepts flexible formats: CO-45, CO45, 45 (assumed CO- prefix), PR-1, OA-23, PI-15.
+    Returns the explanation, recommended action, appeal success probability, and difficulty.
+    """
+    normalized = _normalize_carc_code(code)
+    entry = CARC_CODE_LIBRARY.get(normalized)
+    if entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"CARC code '{code}' not found (normalized: '{normalized}'). "
+                   f"Supported codes: {', '.join(CARC_CODE_LIBRARY.keys())}",
+        )
+    return schemas.CARCEntry(code=normalized, **entry)
 
 @router.post("/compare")
 async def compare_eobs(analysis_ids: list[str]):
