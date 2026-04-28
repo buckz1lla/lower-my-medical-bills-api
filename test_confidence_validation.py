@@ -520,6 +520,139 @@ TEST_CASES: List[Dict[str, Any]] = [
         ],
         "notes": "Single CO-22 claim — reason_code_analysis fires (correct) but coordination_of_benefits cross-claim rule must NOT fire.",
     },
+    # ------------------------------------------------------------------
+    # New CARC codes (CO-57, CO-151, CO-170, CO-197, CO-252) — phase 2
+    # ------------------------------------------------------------------
+    {
+        "name": "CARC CO-197 — prior authorization missing",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-021",
+                visit_date=date(2024, 6, 1),
+                in_network=True,
+                provider_name="Orthopedic Surgery Center",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 6, 1),
+                        provider_name="Orthopedic Surgery Center",
+                        service_description="Knee Arthroscopy",
+                        billed_amount=8500.0,
+                        allowed_amount=3200.0,
+                        patient_responsibility=1600.0,
+                        insurance_paid=0.0,
+                        status="denied",
+                        reason_code="CO-197",
+                    )
+                ],
+            )
+        ],
+        "notes": "CO-197 prior auth missing denial — reason_code_analysis should fire with type=appeal.",
+    },
+    {
+        "name": "CARC CO-252 — additional documentation required",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-022",
+                visit_date=date(2024, 6, 5),
+                in_network=True,
+                provider_name="Diagnostic Imaging",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 6, 5),
+                        provider_name="Diagnostic Imaging",
+                        service_description="CT Scan Abdomen with Contrast",
+                        billed_amount=2200.0,
+                        allowed_amount=900.0,
+                        patient_responsibility=450.0,
+                        insurance_paid=0.0,
+                        status="denied",
+                        reason_code="CO-252",
+                    )
+                ],
+            )
+        ],
+        "notes": "CO-252 documentation request — reason_code_analysis should fire with type=billing_error.",
+    },
+    {
+        "name": "CARC CO-151 — level of service not supported",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-023",
+                visit_date=date(2024, 6, 10),
+                in_network=True,
+                provider_name="Memorial Hospital",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 6, 10),
+                        provider_name="Memorial Hospital",
+                        service_description="Inpatient Observation — Extended Stay",
+                        billed_amount=12000.0,
+                        allowed_amount=4500.0,
+                        patient_responsibility=2250.0,
+                        insurance_paid=0.0,
+                        status="denied",
+                        reason_code="CO-151",
+                    )
+                ],
+            )
+        ],
+        "notes": "CO-151 level-of-care denial — reason_code_analysis should fire with type=appeal.",
+    },
+    {
+        "name": "CARC CO-170 — provider type not covered",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-024",
+                visit_date=date(2024, 6, 15),
+                in_network=True,
+                provider_name="Behavioral Health Associates",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 6, 15),
+                        provider_name="Behavioral Health Associates",
+                        service_description="Psychiatric Evaluation",
+                        billed_amount=1100.0,
+                        allowed_amount=600.0,
+                        patient_responsibility=300.0,
+                        insurance_paid=0.0,
+                        status="denied",
+                        reason_code="CO-170",
+                    )
+                ],
+            )
+        ],
+        "notes": "CO-170 provider type not covered — reason_code_analysis should fire with type=billing_error.",
+    },
+    {
+        "name": "CARC CO-57 — referral absent or not obtained",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-025",
+                visit_date=date(2024, 6, 20),
+                in_network=True,
+                provider_name="Neurology Specialists",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2024, 6, 20),
+                        provider_name="Neurology Specialists",
+                        service_description="Neurology Consultation",
+                        billed_amount=750.0,
+                        allowed_amount=320.0,
+                        patient_responsibility=160.0,
+                        insurance_paid=0.0,
+                        status="denied",
+                        reason_code="CO-57",
+                    )
+                ],
+            )
+        ],
+        "notes": "CO-57 referral absent denial — reason_code_analysis should fire with type=appeal.",
+    },
 ]
 
 
