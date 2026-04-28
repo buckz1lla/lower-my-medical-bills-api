@@ -431,6 +431,7 @@ def evaluate_claims(
     opportunities.extend(_rule_deductible_accumulator(claims, user_profile))
     opportunities.extend(_rule_unbundling(claims))
     opportunities.extend(_rule_coordination_of_benefits(claims))
+    opportunities.extend(_rule_systemic_prior_auth(claims))
 
     return opportunities
 
@@ -1099,6 +1100,140 @@ def _rule_coordination_of_benefits(claims: List[schemas.ClaimGroup]) -> List[sch
             ],
             missing_data_points=missing_data_points,
             **_appeal_deadline_fields(co22_claims[0].visit_date),
+        )
+    )
+
+    return opportunities
+
+
+def _rule_systemic_prior_auth(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
+    """
+    Systemic prior-authorization failure cross-claim detection.
+
+    When CO-197 (prior auth missing) or CO-57 (referral absent) appears on
+    2 or more *distinct* claims — especially from the same or related providers —
+    it signals a recurring failure in the provider's pre-authorization workflow,
+    not a one-off patient error.  The actionable recommendation shifts from
+    "appeal this denial" to "engage the provider billing department to correct
+    their authorization process," which has a materially higher resolution rate.
+
+    Single-claim CO-197/CO-57 is already handled by _rule_reason_code_analysis.
+    """
+    opportunities: List[schemas.SavingsOpportunity] = []
+
+    prior_auth_codes = {"CO-197", "CO-57"}
+
+    # Collect claims that have at least one CO-197 or CO-57 line item
+    affected_claims = [
+        claim for claim in claims
+        if any(
+            _normalize_carc_code(item.reason_code or "") in prior_auth_codes
+            for item in claim.line_items
+        )
+    ]
+
+    if len(affected_claims) < 2:
+        return opportunities
+
+    affected_ids = [c.claim_id for c in affected_claims]
+
+    # Count distinct providers to sharpen the recommendation
+    distinct_providers = {c.provider_name for c in affected_claims if c.provider_name}
+    provider_note = (
+        f"All denials are from a single provider ({next(iter(distinct_providers))}), "
+        "strongly suggesting a recurring pre-authorization workflow failure at that practice."
+        if len(distinct_providers) == 1
+        else f"Denials span {len(distinct_providers)} providers, suggesting either a plan-wide "
+        "authorization requirement change or a systemic referral tracking issue."
+    )
+
+    # Tally codes to surface the dominant pattern
+    co197_count = sum(
+        1 for claim in affected_claims
+        for item in claim.line_items
+        if _normalize_carc_code(item.reason_code or "") == "CO-197"
+    )
+    co57_count = sum(
+        1 for claim in affected_claims
+        for item in claim.line_items
+        if _normalize_carc_code(item.reason_code or "") == "CO-57"
+    )
+
+    if co197_count >= co57_count:
+        primary_code = "CO-197"
+        primary_label = "prior authorization missing"
+    else:
+        primary_code = "CO-57"
+        primary_label = "referral absent"
+
+    total_at_risk = sum(
+        item.patient_responsibility
+        for claim in affected_claims
+        for item in claim.line_items
+        if _normalize_carc_code(item.reason_code or "") in prior_auth_codes
+    )
+
+    missing_data_points = [
+        "Prior authorization request confirmation numbers from provider",
+        "Plan authorization requirement documentation for each service type",
+    ]
+    score = _apply_data_confidence_guard(0.55, missing_data_points)
+
+    opportunities.append(
+        schemas.SavingsOpportunity(
+            opportunity_id=str(uuid.uuid4()),
+            type="appeal",
+            claim_id=affected_claims[0].claim_id,
+            severity="high",
+            estimated_savings=round(total_at_risk * 0.50, 2),
+            description=(
+                f"Systemic prior-authorization failure detected: {primary_label} ({primary_code}) "
+                f"appears on {len(affected_claims)} separate claims "
+                f"({', '.join(affected_ids)}). {provider_note}"
+            ),
+            recommended_action=(
+                "This pattern indicates a recurring workflow problem, not an isolated error. "
+                "Contact the provider's billing or authorization department and request a written "
+                "explanation of their pre-authorization process for these service types. "
+                "Ask whether any retroactive authorization requests were submitted. "
+                "For each denial, file a formal appeal citing provider administrative error and "
+                "request the insurer apply retroactive authorization where medically appropriate. "
+                "If the provider acknowledges the error, request they resubmit all affected claims "
+                "with corrected authorization data before the appeal deadline."
+            ),
+            difficulty_level="hard",
+            time_estimate_days=45,
+            confidence_score=score,
+            confidence_level=_confidence_level(score),
+            flag_reason=(
+                f"{primary_code} ({primary_label}) detected on {len(affected_claims)} claims — "
+                "systemic pattern consistent with provider pre-authorization workflow failure."
+            ),
+            verification_steps=[
+                f"Collect all EOBs showing {primary_code} and list service dates and providers.",
+                "Contact the provider billing department and ask for the authorization request log "
+                "for each affected service date.",
+                "Request your insurer's written prior-authorization requirements for each service type.",
+                "File a formal appeal for each claim citing provider administrative error and "
+                "requesting retroactive authorization consideration.",
+                "Set calendar reminders for each claim's appeal deadline — missing one forfeits "
+                "that claim's recovery.",
+            ],
+            could_be_correct_if=[
+                "Your plan genuinely requires prior authorization for these service types and "
+                "the provider was informed.",
+                "A retroactive authorization request was already denied and confirmed in writing.",
+                "Services were elective and the patient acknowledged the authorization requirement "
+                "in advance.",
+            ],
+            evidence=[
+                f"{primary_code} ({primary_label}) found on claims: {', '.join(affected_ids)}",
+                f"CO-197 occurrences: {co197_count} | CO-57 occurrences: {co57_count}",
+                f"Total patient responsibility at risk: {_fmt_usd(total_at_risk)}",
+                provider_note,
+            ],
+            missing_data_points=missing_data_points,
+            **_appeal_deadline_fields(affected_claims[0].visit_date),
         )
     )
 

@@ -707,6 +707,57 @@ TEST_CASES: List[Dict[str, Any]] = [
         ],
         "notes": "29827 bundles 29819 — CCI unbundling rule should fire.",
     },
+    # ------------------------------------------------------------------
+    # Systemic prior-auth rule
+    # ------------------------------------------------------------------
+    {
+        "name": "Systemic prior-auth — CO-197 on two separate claims",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-029A",
+                visit_date=date(2024, 8, 5),
+                in_network=True,
+                provider_name="Spine & Orthopedics Group",
+                line_items=[
+                    make_line_item("Lumbar MRI", 2400.0, status="denied", reason_code="CO-197"),
+                ],
+            ),
+            make_claim(
+                claim_id="CLM-029B",
+                visit_date=date(2024, 8, 19),
+                in_network=True,
+                provider_name="Spine & Orthopedics Group",
+                line_items=[
+                    make_line_item("Physical Therapy Evaluation", 350.0, status="denied", reason_code="CO-197"),
+                ],
+            ),
+        ],
+        "notes": "CO-197 on 2 claims from same provider — systemic prior-auth rule should fire with type=appeal.",
+    },
+    {
+        "name": "Systemic prior-auth — single CO-197 claim, cross-claim rule should not fire",
+        "expected_flag": False,
+        "expected_types_absent": ["appeal"],
+        "claims": [
+            make_claim(
+                claim_id="CLM-030",
+                visit_date=date(2024, 8, 25),
+                in_network=True,
+                provider_name="Outpatient Imaging",
+                line_items=[
+                    make_line_item("CT Chest with Contrast", 1800.0, status="denied", reason_code="CO-197"),
+                ],
+            ),
+        ],
+        "notes": (
+            "Single CO-197 claim — reason_code_analysis fires (type=appeal, correct) but the "
+            "systemic cross-claim rule must NOT fire a second appeal opportunity. "
+            "expected_types_absent is checked: we assert no *additional* appeal from the systemic rule. "
+            "Since reason_code_analysis also produces type=appeal, we use a custom check."
+        ),
+        "systemic_only_check": True,
+    },
 ]
 
 
@@ -748,7 +799,14 @@ def run_validation() -> Dict[str, Any]:
         # Some cases want to assert a specific type is absent (e.g. NSA on non-emergency OON).
         # expected_flag=False + expected_types_absent=[...] means: those types should NOT fire.
         # fired=True means one of the absent types incorrectly appeared → FP.
-        if "expected_types_absent" in case:
+        #
+        # systemic_only_check=True: single CO-197 claim produces exactly 1 appeal opp (from
+        # reason_code_analysis). The systemic cross-claim rule must NOT add a second one.
+        # fired=True (FP) if 2+ appeal opportunities exist; fired=False (TN) if exactly 1.
+        if case.get("systemic_only_check"):
+            appeal_opps = [opp for opp in opportunities if opp.type == "appeal"]
+            fired = len(appeal_opps) > 1  # >1 means systemic rule incorrectly fired
+        elif "expected_types_absent" in case:
             absent_types = set(case["expected_types_absent"])
             fired = any(opp.type in absent_types for opp in opportunities)
         else:
