@@ -294,6 +294,55 @@ CCI_EDIT_PAIRS = [
     ("27447", "27331", "Total knee arthroplasty (27447) already includes knee arthroscopy (27331) when performed in the same operative session."),
     ("27130", "27125", "Total hip arthroplasty (27130) already includes partial hip arthroplasty (27125) — only one can be billed per session."),
     ("99213", "99000", "Office E/M visit (99213) already includes specimen handling — billing 99000 separately is a common unbundling error."),
+    ("99214", "99000", "Office E/M visit (99214) already includes specimen handling — billing 99000 separately is a common unbundling error."),
+    ("99215", "99000", "Office E/M visit (99215) already includes specimen handling — billing 99000 separately is a common unbundling error."),
+    # Cardiology — Echocardiography
+    ("93306", "93307", "Complete TTE with Doppler (93306) already includes echocardiography without Doppler (93307). Billing both is an unbundling error."),
+    ("93306", "93320", "Complete TTE with Doppler (93306) already includes spectral Doppler echocardiography (93320). Billing both is an unbundling error."),
+    ("93306", "93325", "Complete TTE with Doppler (93306) already includes color-flow Doppler (93325). Billing both is an unbundling error."),
+    # Cardiology — Cardiovascular Stress Testing
+    ("93015", "93016", "Complete cardiovascular stress test (93015) already includes physician supervision (93016). The complete code cannot be unbundled."),
+    ("93015", "93017", "Complete cardiovascular stress test (93015) already includes the exercise ECG tracing (93017). The complete code cannot be unbundled."),
+    ("93015", "93018", "Complete cardiovascular stress test (93015) already includes physician interpretation and report (93018). The complete code cannot be unbundled."),
+    # Radiology — MRI with and without contrast
+    ("70553", "70551", "MRI brain with and without contrast (70553) already includes MRI brain without contrast (70551). Billing both is an unbundling error."),
+    ("70553", "70552", "MRI brain with and without contrast (70553) already includes MRI brain with contrast (70552). Billing both is an unbundling error."),
+    ("72158", "72148", "MRI lumbar spine with and without contrast (72158) already includes MRI lumbar spine without contrast (72148). Billing both is an unbundling error."),
+    ("72158", "72149", "MRI lumbar spine with and without contrast (72158) already includes MRI lumbar spine with contrast (72149). Billing both is an unbundling error."),
+    ("73723", "73721", "MRI any joint lower extremity with and without contrast (73723) already includes the without-contrast component (73721). Billing both is an unbundling error."),
+    ("73223", "73221", "MRI any joint upper extremity with and without contrast (73223) already includes the without-contrast component (73221). Billing both is an unbundling error."),
+    # Radiology — CT abdomen/pelvis
+    ("74178", "74176", "CT abdomen and pelvis with and without contrast (74178) already includes CT without contrast (74176). Billing both is an unbundling error."),
+    ("74178", "74177", "CT abdomen and pelvis with and without contrast (74178) already includes CT with contrast (74177). Billing both is an unbundling error."),
+    # Gastroenterology — Colonoscopy
+    ("45384", "45378", "Colonoscopy with removal of polyp by hot biopsy forceps (45384) already includes diagnostic colonoscopy (45378). The therapeutic code cannot be unbundled."),
+    ("45385", "45378", "Colonoscopy with snare polypectomy (45385) already includes diagnostic colonoscopy (45378). The therapeutic code cannot be unbundled."),
+    ("45381", "45378", "Colonoscopy with directed submucosal injection (45381) already includes diagnostic colonoscopy (45378). The therapeutic code cannot be unbundled."),
+    # Gastroenterology — Upper GI Endoscopy
+    ("43245", "43235", "Upper GI endoscopy with dilation of esophagus (43245) already includes diagnostic upper GI endoscopy (43235). The therapeutic code cannot be unbundled."),
+    ("43247", "43235", "Upper GI endoscopy with removal of foreign body (43247) already includes diagnostic upper GI endoscopy (43235). The therapeutic code cannot be unbundled."),
+    # Orthopedics — Knee Arthroscopy
+    ("29880", "29870", "Knee arthroscopy with medial and lateral meniscectomy (29880) already includes diagnostic knee arthroscopy (29870). Billing the diagnostic code separately is an unbundling error."),
+    ("29881", "29870", "Knee arthroscopy with meniscectomy (29881) already includes diagnostic knee arthroscopy (29870). Billing the diagnostic code separately is an unbundling error."),
+    ("29882", "29870", "Knee arthroscopy with meniscus repair (29882) already includes diagnostic knee arthroscopy (29870). Billing the diagnostic code separately is an unbundling error."),
+    # Orthopedics — Shoulder Arthroscopy
+    ("29826", "29819", "Shoulder arthroscopy with decompression (29826) already includes diagnostic shoulder arthroscopy (29819). Billing the diagnostic code separately is an unbundling error."),
+    ("29827", "29819", "Shoulder arthroscopy with rotator cuff repair (29827) already includes diagnostic shoulder arthroscopy (29819). Billing the diagnostic code separately is an unbundling error."),
+    # Laboratory — Metabolic Panels
+    ("80053", "80048", "Comprehensive metabolic panel (80053) already includes all tests in the basic metabolic panel (80048). Billing both on the same date is unbundling."),
+    ("80053", "82947", "Comprehensive metabolic panel (80053) already includes glucose (82947). Billing both on the same date is unbundling."),
+    ("80053", "84132", "Comprehensive metabolic panel (80053) already includes potassium (84132). Billing both on the same date is unbundling."),
+    ("80048", "82947", "Basic metabolic panel (80048) already includes glucose (82947). Billing both on the same date is unbundling."),
+    # Laboratory — Lipid Panel
+    ("80061", "82465", "Lipid panel (80061) already includes total cholesterol (82465). Billing both on the same date is unbundling."),
+    ("80061", "83718", "Lipid panel (80061) already includes HDL cholesterol (83718). Billing both on the same date is unbundling."),
+    ("80061", "84478", "Lipid panel (80061) already includes triglycerides (84478). Billing both on the same date is unbundling."),
+    # Pathology — Surgical Pathology
+    ("88307", "88305", "Surgical pathology Level VI (88307) already includes the Level V examination (88305) for the same specimen. Billing both is unbundling."),
+    ("88305", "88300", "Surgical pathology Level V (88305) already includes the Level I gross-only examination (88300) for the same specimen. Billing both is unbundling."),
+    # Psychotherapy
+    ("90837", "90832", "60-minute individual psychotherapy (90837) already includes the 30-minute service (90832). Billing both on the same date is an unbundling error."),
+    ("90837", "90834", "60-minute individual psychotherapy (90837) already includes the 45-minute service (90834). Billing both on the same date is an unbundling error."),
 ]
 
 

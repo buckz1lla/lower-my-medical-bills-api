@@ -653,6 +653,60 @@ TEST_CASES: List[Dict[str, Any]] = [
         ],
         "notes": "CO-57 referral absent denial — reason_code_analysis should fire with type=appeal.",
     },
+    # ------------------------------------------------------------------
+    # CCI pair expansion — new specialties (phase 2)
+    # ------------------------------------------------------------------
+    {
+        "name": "Unbundling — echo with Doppler (93306) billed with color-flow (93325)",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-026",
+                visit_date=date(2024, 7, 1),
+                in_network=True,
+                provider_name="Cardiology Associates",
+                line_items=[
+                    make_line_item("Transthoracic Echo with Doppler", 1200.0, cpt_code="93306"),
+                    make_line_item("Color-Flow Doppler Echo", 280.0, cpt_code="93325"),
+                ],
+            )
+        ],
+        "notes": "93306 bundles 93325 — CCI unbundling rule should fire.",
+    },
+    {
+        "name": "Unbundling — comprehensive metabolic panel (80053) billed with glucose (82947)",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-027",
+                visit_date=date(2024, 7, 10),
+                in_network=True,
+                provider_name="Quest Diagnostics",
+                line_items=[
+                    make_line_item("Comprehensive Metabolic Panel", 180.0, cpt_code="80053"),
+                    make_line_item("Glucose, Blood", 45.0, cpt_code="82947"),
+                ],
+            )
+        ],
+        "notes": "80053 bundles 82947 — CCI unbundling rule should fire.",
+    },
+    {
+        "name": "Unbundling — shoulder arthroscopy with rotator cuff repair (29827) and diagnostic scope (29819)",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-028",
+                visit_date=date(2024, 7, 20),
+                in_network=True,
+                provider_name="Orthopedic Surgical Center",
+                line_items=[
+                    make_line_item("Shoulder Arthroscopy with Rotator Cuff Repair", 4500.0, cpt_code="29827"),
+                    make_line_item("Diagnostic Shoulder Arthroscopy", 900.0, cpt_code="29819"),
+                ],
+            )
+        ],
+        "notes": "29827 bundles 29819 — CCI unbundling rule should fire.",
+    },
 ]
 
 
