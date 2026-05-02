@@ -45,13 +45,26 @@ class AnalyticsEvent(BaseModel):
 # grant anon insert access under the current RLS policy.
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip() or os.getenv("SUPABASE_ANON_KEY", "").strip()
+_SUPABASE_KEY_SOURCE = (
+    "service_role" if os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    else "anon" if os.getenv("SUPABASE_ANON_KEY", "").strip()
+    else "none"
+)
 supabase_client = None
+_supabase_init_error: Optional[str] = None
 
 if SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print(f"Supabase client initialized (key_source={_SUPABASE_KEY_SOURCE})")
     except Exception as e:
-        print(f"Warning: Failed to initialize Supabase: {e}")
+        _supabase_init_error = str(e)
+        print(f"Warning: Failed to initialize Supabase ({_SUPABASE_KEY_SOURCE}): {e}")
+else:
+    _supabase_init_error = (
+        f"missing_vars: url={'set' if SUPABASE_URL else 'unset'} key={'set' if SUPABASE_KEY else 'unset'}"
+    )
+    print(f"Warning: Supabase not configured — {_supabase_init_error}")
 
 
 # Log events to Supabase (primary) then file (fallback)
@@ -126,7 +139,38 @@ def _empty_event_counts() -> Dict[str, int]:
     return {name: 0 for name in TRACKED_EVENTS}
 
 
+def _read_day_event_counts_from_supabase(day_str: str) -> Optional[Dict[str, int]]:
+    """Query Supabase for event counts for a given day. Returns None when unavailable or on error."""
+    if not supabase_client:
+        return None
+    try:
+        start = f"{day_str}T00:00:00"
+        end = f"{day_str}T23:59:59.999999"
+        result = (
+            supabase_client.table("events")
+            .select("event_name")
+            .gte("timestamp", start)
+            .lte("timestamp", end)
+            .execute()
+        )
+        counts = _empty_event_counts()
+        for row in result.data or []:
+            name = row.get("event_name", "")
+            if name in counts:
+                counts[name] += 1
+        return counts
+    except Exception as e:
+        print(f"Supabase read error for {day_str}: {e}")
+        return None
+
+
 def _read_day_event_counts(day_str: str) -> Dict[str, int]:
+    # Prefer Supabase when available — matches the write path
+    supabase_counts = _read_day_event_counts_from_supabase(day_str)
+    if supabase_counts is not None:
+        return supabase_counts
+
+    # Fall back to local file
     analytics_dir = _analytics_dir()
     log_file = analytics_dir / f"analytics-{day_str}.jsonl"
     counts = _empty_event_counts()
@@ -303,6 +347,40 @@ async def get_storage_alerts(
         "count": len(rows),
         "alerts": rows[:max_items],
     }
+
+
+@router.get("/analytics/supabase-status")
+async def get_supabase_status(request: Request, api_key: Optional[str] = Query(None)):
+    """
+    Diagnostic endpoint — reports whether the Supabase client initialized successfully
+    and, if not, the exact error message. Useful for confirming env var configuration.
+    """
+    _enforce_analytics_access(api_key, request)
+
+    # Mask URL to avoid leaking full project ref in browser responses
+    masked_url = None
+    if SUPABASE_URL:
+        parts = SUPABASE_URL.split(".")
+        masked_url = f"{SUPABASE_URL[:12]}...{parts[-1]}" if len(parts) > 1 else f"{SUPABASE_URL[:12]}..."
+
+    status = {
+        "supabase_url_set": bool(SUPABASE_URL),
+        "supabase_url_preview": masked_url,
+        "supabase_key_set": bool(SUPABASE_KEY),
+        "supabase_key_source": _SUPABASE_KEY_SOURCE,
+        "client_initialized": supabase_client is not None,
+        "init_error": _supabase_init_error,
+    }
+
+    # Attempt a lightweight ping if client is up
+    if supabase_client is not None:
+        try:
+            supabase_client.table("events").select("id").limit(1).execute()
+            status["ping"] = "ok"
+        except Exception as e:
+            status["ping"] = f"error: {e}"
+
+    return status
 
 
 @router.get("/analytics/funnel")
