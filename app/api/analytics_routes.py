@@ -555,6 +555,103 @@ async def get_revenue_analytics(
     }
 
 
+@router.post("/analytics/backfill-from-files")
+async def backfill_from_files(
+    request: Request,
+    api_key: Optional[str] = Query(None),
+    dry_run: bool = Query(False),
+):
+    """
+    Replay all local analytics-*.jsonl files into Supabase.
+    Safe to run multiple times — rows are inserted in batches and any
+    duplicate-key errors on individual rows are skipped so already-imported
+    events are not doubled.
+
+    Pass ?dry_run=true to see what would be inserted without writing anything.
+    """
+    _enforce_analytics_access(api_key, request)
+
+    if not supabase_client:
+        raise HTTPException(status_code=503, detail="Supabase client not initialized — check env vars.")
+
+    analytics_dir = _analytics_dir()
+    jsonl_files = sorted(analytics_dir.glob("analytics-*.jsonl"))
+
+    total_read = 0
+    total_inserted = 0
+    total_skipped = 0
+    errors: list[str] = []
+    files_processed: list[str] = []
+
+    for log_file in jsonl_files:
+        rows_to_insert: list[dict] = []
+        try:
+            with open(log_file, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        evt = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    total_read += 1
+                    # File format uses "event" / "data" keys;
+                    # Supabase table expects "event_name" / "event_data"
+                    data = evt.get("data") or {}
+                    rows_to_insert.append({
+                        "event_name": evt.get("event", "unknown"),
+                        "event_data": data,
+                        "timestamp": evt.get("timestamp") or datetime.now().isoformat(),
+                        "analysis_id": data.get("analysisId") if data else None,
+                        "session_id": data.get("sessionId") if data else None,
+                    })
+        except Exception as e:
+            errors.append(f"{log_file.name}: read error — {e}")
+            continue
+
+        if not rows_to_insert:
+            continue
+
+        files_processed.append(log_file.name)
+
+        if dry_run:
+            total_inserted += len(rows_to_insert)
+            continue
+
+        # Insert in batches of 100; use ignore_duplicates where possible
+        batch_size = 100
+        for i in range(0, len(rows_to_insert), batch_size):
+            batch = rows_to_insert[i : i + batch_size]
+            try:
+                supabase_client.table("events").insert(batch, returning="minimal").execute()
+                total_inserted += len(batch)
+            except Exception as e:
+                err_str = str(e)
+                # If the whole batch failed due to duplicate PKs, fall back to row-by-row
+                if "duplicate" in err_str.lower() or "unique" in err_str.lower():
+                    for row in batch:
+                        try:
+                            supabase_client.table("events").insert(row, returning="minimal").execute()
+                            total_inserted += 1
+                        except Exception:
+                            total_skipped += 1
+                else:
+                    errors.append(f"{log_file.name} batch {i//batch_size}: {err_str}")
+                    total_skipped += len(batch)
+
+    return {
+        "dry_run": dry_run,
+        "files_found": len(jsonl_files),
+        "files_with_data": len(files_processed),
+        "files_processed": files_processed,
+        "total_rows_read": total_read,
+        "total_inserted": total_inserted,
+        "total_skipped": total_skipped,
+        "errors": errors,
+    }
+
+
 @router.get("/analytics/price-experiment")
 async def get_price_experiment_analytics(
     request: Request,
