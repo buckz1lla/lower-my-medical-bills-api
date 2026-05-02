@@ -11,7 +11,12 @@ processed_webhook_events = {}  # Track processed webhook IDs for idempotency
 refund_records = {}  # Track refunds by analysis_id
 failed_payment_attempts = {}  # Track failed payment attempts for retry logic
 
+# Outcome store: {analysis_id: {opportunity_id: {outcome dict}}}
+# Persisted to data/outcome_state.json independently of payment state.
+outcome_store: dict[str, dict[str, dict]] = {}
+
 _STORE_FILE = Path(__file__).parent.parent / "data" / "payment_state.json"
+_OUTCOME_FILE = Path(__file__).parent.parent / "data" / "outcome_state.json"
 
 
 def _save_payment_state() -> None:
@@ -44,6 +49,37 @@ def _load_payment_state() -> None:
         # Keep startup resilient; file can be recreated on next successful update.
         print(f"Warning: Failed to load payment state: {e}")
         return
+
+
+# ===== OUTCOME PERSISTENCE =====
+
+def _save_outcome_state() -> None:
+    _OUTCOME_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_OUTCOME_FILE, "w", encoding="utf-8") as f:
+        json.dump({"outcomes": outcome_store, "updated_at": datetime.utcnow().isoformat()}, f, ensure_ascii=True, indent=2)
+
+
+def _load_outcome_state() -> None:
+    if not _OUTCOME_FILE.exists():
+        return
+    try:
+        with open(_OUTCOME_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        outcome_store.update(payload.get("outcomes", {}))
+    except Exception as e:
+        print(f"Warning: Failed to load outcome state: {e}")
+
+
+def upsert_outcome(analysis_id: str, opportunity_id: str, outcome_dict: dict) -> list[dict]:
+    """Insert or overwrite a single outcome record. Returns all outcomes for the analysis."""
+    outcome_store.setdefault(analysis_id, {})[opportunity_id] = outcome_dict
+    _save_outcome_state()
+    return list(outcome_store[analysis_id].values())
+
+
+def get_outcomes(analysis_id: str) -> list[dict]:
+    """Return all recorded outcomes for an analysis (empty list if none)."""
+    return list(outcome_store.get(analysis_id, {}).values())
 
 
 def initialize_analysis_payment(analysis_id: str) -> None:
@@ -163,3 +199,4 @@ def get_payment_history(analysis_id: str) -> dict:
 
 
 _load_payment_state()
+_load_outcome_state()
