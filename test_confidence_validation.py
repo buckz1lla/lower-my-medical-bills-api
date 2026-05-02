@@ -25,12 +25,14 @@ def make_line_item(
     service_date: date | None = None,
     reason_code: str | None = None,
     cpt_code: str | None = None,
+    modifier: str | None = None,
 ) -> schemas.LineItem:
     return schemas.LineItem(
         service_date=service_date,
         provider_name="Test Provider",
         service_description=service_description,
         cpt_code=cpt_code,
+        modifier=modifier,
         billed_amount=billed_amount,
         allowed_amount=billed_amount,
         patient_responsibility=max(0.0, billed_amount * 0.2),
@@ -757,6 +759,84 @@ TEST_CASES: List[Dict[str, Any]] = [
             "Since reason_code_analysis also produces type=appeal, we use a custom check."
         ),
         "systemic_only_check": True,
+    },
+    # ------------------------------------------------------------------
+    # Modifier-based unbundling detection
+    # ------------------------------------------------------------------
+    {
+        "name": "Modifier -25 abuse — E/M with -25 same day as procedure",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-031",
+                visit_date=date(2024, 9, 10),
+                in_network=True,
+                provider_name="Dermatology Associates",
+                line_items=[
+                    make_line_item("Office Visit Level 3", 180.0, cpt_code="99213", modifier="-25"),
+                    make_line_item("Shave Removal Benign Lesion", 320.0, cpt_code="11300"),
+                ],
+            )
+        ],
+        "notes": "E/M 99213 with modifier -25 billed same day as procedure 11300 — modifier abuse rule should fire.",
+    },
+    {
+        "name": "Modifier -25 absent — E/M without -25 same day as procedure, rule must not fire",
+        "expected_flag": False,
+        "expected_types_absent": ["billing_error"],
+        "claims": [
+            make_claim(
+                claim_id="CLM-032",
+                visit_date=date(2024, 9, 12),
+                in_network=True,
+                provider_name="Dermatology Associates",
+                line_items=[
+                    make_line_item("Office Visit Level 3", 180.0, cpt_code="99213"),
+                    make_line_item("Shave Removal Benign Lesion", 320.0, cpt_code="11300"),
+                ],
+            )
+        ],
+        "notes": "E/M without modifier -25 + procedure — modifier abuse rule must NOT fire.",
+    },
+    {
+        "name": "CCI bypass with modifier -59 — modifier abuse fires, CCI rule skips",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-033",
+                visit_date=date(2024, 9, 18),
+                in_network=True,
+                provider_name="Cardiology Center",
+                line_items=[
+                    make_line_item("Echocardiography Complete (93306)", 1800.0, cpt_code="93306"),
+                    make_line_item("Doppler Color-Flow Mapping (93325)", 420.0, cpt_code="93325", modifier="-59"),
+                ],
+            )
+        ],
+        "notes": (
+            "CCI pair 93306/93325 present AND component 93325 has modifier -59. "
+            "CCI rule should skip; modifier abuse rule should fire with lower confidence."
+        ),
+    },
+    {
+        "name": "CCI pair no modifier — CCI unbundling fires, modifier abuse must not add duplicate",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-034",
+                visit_date=date(2024, 9, 20),
+                in_network=True,
+                provider_name="Cardiology Center",
+                line_items=[
+                    make_line_item("Echocardiography Complete (93306)", 1800.0, cpt_code="93306"),
+                    make_line_item("Doppler Color-Flow Mapping (93325)", 420.0, cpt_code="93325"),
+                ],
+            )
+        ],
+        "notes": (
+            "CCI pair 93306/93325 with NO modifier — CCI unbundling rule fires. "
+            "Modifier abuse rule must NOT also fire (no modifier present)."
+        ),
     },
 ]
 

@@ -345,6 +345,43 @@ CCI_EDIT_PAIRS = [
     ("90837", "90834", "60-minute individual psychotherapy (90837) already includes the 45-minute service (90834). Billing both on the same date is an unbundling error."),
 ]
 
+# Modifiers that legitimately allow separate billing of CCI component codes.
+# When any of these are present on the component code, the provider is asserting
+# a distinct, separately-identifiable service.
+_BYPASS_MODIFIERS = {"59", "XU", "XE", "XP", "XS"}
+
+# CPT range for E/M services.  Modifier -25 on an E/M code same-day as a
+# procedure is a common overbilling pattern.
+_EM_CPT_MIN = 99202
+_EM_CPT_MAX = 99499
+
+
+def _has_bypass_modifier(modifier: Optional[str]) -> bool:
+    """Return True if the modifier string contains any CCI bypass modifier."""
+    if not modifier:
+        return False
+    parts = re.split(r"[-,\s]+", modifier.strip().lstrip("-").upper())
+    return bool(_BYPASS_MODIFIERS.intersection(p for p in parts if p))
+
+
+def _parse_modifiers(modifier: Optional[str]) -> set:
+    """Return a set of individual modifier codes from a modifier string."""
+    if not modifier:
+        return set()
+    parts = re.split(r"[-,\s]+", modifier.strip().lstrip("-").upper())
+    return {p for p in parts if p}
+
+
+def _is_em_cpt(cpt_code: Optional[str]) -> bool:
+    """Return True if the CPT code falls in the E/M range (99202–99499)."""
+    if not cpt_code:
+        return False
+    try:
+        code_int = int(cpt_code.strip())
+        return _EM_CPT_MIN <= code_int <= _EM_CPT_MAX
+    except ValueError:
+        return False
+
 
 def _normalize_carc_code(raw_code: str) -> str:
     """Normalize a raw reason code string to a CARC library key (e.g. '45' -> 'CO-45')."""
@@ -430,6 +467,7 @@ def evaluate_claims(
     opportunities.extend(_rule_denied_claim_appeal(claims))
     opportunities.extend(_rule_deductible_accumulator(claims, user_profile))
     opportunities.extend(_rule_unbundling(claims))
+    opportunities.extend(_rule_modifier_abuse(claims))
     opportunities.extend(_rule_coordination_of_benefits(claims))
     opportunities.extend(_rule_systemic_prior_auth(claims))
 
@@ -975,6 +1013,13 @@ def _rule_unbundling(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOp
                 continue
 
             component_items = cpt_to_items[component_code]
+
+            # If any component item carries a bypass modifier (-59, XU, XE, XP, XS) the
+            # provider is asserting a distinct service.  Hand off to _rule_modifier_abuse
+            # which fires a lower-confidence flag asking the consumer to verify.
+            if any(_has_bypass_modifier(item.modifier) for item in component_items):
+                continue
+
             component_billed = sum(item.billed_amount for item in component_items)
 
             missing_data_points = [
@@ -1236,5 +1281,195 @@ def _rule_systemic_prior_auth(claims: List[schemas.ClaimGroup]) -> List[schemas.
             **_appeal_deadline_fields(affected_claims[0].visit_date),
         )
     )
+
+    return opportunities
+
+
+def _rule_modifier_abuse(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
+    """
+    Modifier-based overbilling detection.
+
+    Two patterns:
+
+    1. CCI bypass with -59 / X-modifiers
+       When a CCI edit pair is present on a claim AND the component code carries a
+       bypass modifier (-59, XU, XE, XP, XS), the provider is asserting a distinct
+       service to circumvent the CCI edit.  This is sometimes legitimate but is a
+       documented abuse vector.  Lower-confidence flag asking the consumer to verify.
+       (_rule_unbundling skips these pairs, so this rule is the only one that fires.)
+
+    2. Modifier -25 on same-day E/M + procedure
+       Modifier -25 on an E/M code (CPT 99202-99499) indicates a "significant,
+       separately identifiable evaluation and management service" on the same day as
+       a procedure.  It is frequently misapplied to collect a full office-visit fee
+       for pre-procedure work that is already bundled into the procedure's RVU.
+    """
+    opportunities: List[schemas.SavingsOpportunity] = []
+
+    for claim in claims:
+        cpt_to_items: dict = {}
+        for item in claim.line_items:
+            if item.cpt_code:
+                key = item.cpt_code.strip().upper()
+                cpt_to_items.setdefault(key, []).append(item)
+
+        # ------------------------------------------------------------------
+        # Pattern 1: -59 / X-modifier bypass of a CCI edit pair
+        # ------------------------------------------------------------------
+        for comp_code, component_code, cci_reason in CCI_EDIT_PAIRS:
+            if comp_code not in cpt_to_items or component_code not in cpt_to_items:
+                continue
+            component_items = cpt_to_items[component_code]
+            if not any(_has_bypass_modifier(item.modifier) for item in component_items):
+                continue  # No bypass modifier — already handled by _rule_unbundling
+
+            bypass_item = next(i for i in component_items if _has_bypass_modifier(i.modifier))
+            modifier_used = bypass_item.modifier or "-59"
+            component_billed = sum(item.billed_amount for item in component_items)
+
+            missing_data_points = [
+                "Operative or clinical note confirming a distinct anatomical site or separate service session",
+                "Provider documentation explaining why the bypass modifier is clinically justified",
+            ]
+            score = _apply_data_confidence_guard(0.45, missing_data_points)
+            opportunities.append(
+                schemas.SavingsOpportunity(
+                    opportunity_id=str(uuid.uuid4()),
+                    type="billing_error",
+                    claim_id=claim.claim_id,
+                    severity="medium",
+                    estimated_savings=component_billed * 0.70,
+                    description=(
+                        f"Modifier {modifier_used} applied to CPT {component_code} alongside "
+                        f"CPT {comp_code} (comprehensive code). Modifier -59 and X-modifiers are "
+                        f"used to override CCI edit pairs; they are sometimes legitimate but are "
+                        f"a documented overbilling method."
+                    ),
+                    recommended_action=(
+                        f"Request the itemized bill and ask the provider to supply the clinical note "
+                        f"justifying modifier {modifier_used} on CPT {component_code}. "
+                        f"The note must document a distinct service at a separate anatomical site or "
+                        f"a separate operative session — not routine pre/post-procedure work. "
+                        f"If no such documentation exists, ask the provider to remove the modifier and "
+                        f"resubmit; the insurer should then bundle {component_code} into {comp_code}."
+                    ),
+                    difficulty_level="medium",
+                    time_estimate_days=21,
+                    confidence_score=score,
+                    confidence_level=_confidence_level(score),
+                    flag_reason=(
+                        f"Modifier {modifier_used} on CPT {component_code} used to bypass CCI edit with "
+                        f"CPT {comp_code} — verify clinical justification."
+                    ),
+                    verification_steps=[
+                        f"Obtain itemized bill confirming CPT {comp_code}, CPT {component_code}, "
+                        f"and modifier {modifier_used}.",
+                        "Ask the provider: 'Can you provide the clinical note showing why a distinct "
+                        f"service justifies modifier {modifier_used} on CPT {component_code}?'",
+                        "If documentation is absent or insufficient, request the modifier be removed "
+                        "and the claim resubmitted.",
+                        "If the provider cannot justify the modifier, escalate to your insurer asking "
+                        "them to reprocess and bundle the component code.",
+                    ],
+                    could_be_correct_if=[
+                        "The service was performed at a separate anatomical site in the same session.",
+                        "Two distinct procedures occurred on the same day in separate operative sessions.",
+                        "The provider has complete documentation satisfying the modifier's clinical criteria.",
+                    ],
+                    evidence=[
+                        f"CPT {comp_code} (comprehensive) billed alongside CPT {component_code} "
+                        f"(component) with modifier {modifier_used} on claim {claim.claim_id}",
+                        cci_reason,
+                    ],
+                    missing_data_points=missing_data_points,
+                    **_appeal_deadline_fields(claim.visit_date),
+                )
+            )
+
+        # ------------------------------------------------------------------
+        # Pattern 2: Modifier -25 on E/M code same-day as procedure
+        # ------------------------------------------------------------------
+        em_items_with_25 = [
+            item for item in claim.line_items
+            if item.cpt_code
+            and _is_em_cpt(item.cpt_code)
+            and "25" in _parse_modifiers(item.modifier)
+        ]
+        non_em_procedure_items = [
+            item for item in claim.line_items
+            if item.cpt_code and not _is_em_cpt(item.cpt_code)
+        ]
+
+        if not em_items_with_25 or not non_em_procedure_items:
+            continue
+
+        for em_item in em_items_with_25:
+            em_billed = em_item.billed_amount
+            procedure_codes = ", ".join(
+                sorted({i.cpt_code.strip().upper() for i in non_em_procedure_items if i.cpt_code})
+            )
+
+            missing_data_points = [
+                "Documentation confirming the E/M addressed a separate, significant medical condition "
+                "unrelated to the procedure performed",
+                "Provider's modifier -25 attestation or clinical note",
+            ]
+            score = _apply_data_confidence_guard(0.50, missing_data_points)
+            opportunities.append(
+                schemas.SavingsOpportunity(
+                    opportunity_id=str(uuid.uuid4()),
+                    type="billing_error",
+                    claim_id=claim.claim_id,
+                    severity="medium",
+                    estimated_savings=em_billed * 0.80,
+                    description=(
+                        f"Modifier -25 on E/M code CPT {em_item.cpt_code.strip().upper()} same day as "
+                        f"procedure(s) {procedure_codes}. Modifier -25 is meant for a 'significant, "
+                        f"separately identifiable' evaluation — not routine pre-procedure counseling "
+                        f"already bundled into the procedure's payment."
+                    ),
+                    recommended_action=(
+                        f"Ask the provider to supply the clinical note showing the E/M (CPT "
+                        f"{em_item.cpt_code.strip().upper()}) addressed a distinct, significant condition "
+                        f"separate from the reason for the procedure. "
+                        f"If the note only documents standard pre-procedure evaluation, ask the provider "
+                        f"to remove the -25 modifier and resubmit — the E/M is already bundled into the "
+                        f"procedure's reimbursement. "
+                        f"Your insurer can also flag this for review by calling member services and "
+                        f"referencing the claim number."
+                    ),
+                    difficulty_level="medium",
+                    time_estimate_days=21,
+                    confidence_score=score,
+                    confidence_level=_confidence_level(score),
+                    flag_reason=(
+                        f"Modifier -25 on E/M CPT {em_item.cpt_code.strip().upper()} billed same day "
+                        f"as procedure(s) {procedure_codes} — common overbilling pattern."
+                    ),
+                    verification_steps=[
+                        f"Confirm CPT {em_item.cpt_code.strip().upper()} and procedure code(s) "
+                        f"{procedure_codes} appear on the same claim.",
+                        "Ask the provider billing office: 'What separate, significant condition was "
+                        "addressed in the office visit that is distinct from the procedure?'",
+                        "Request the clinical note documenting the E/M service and verify it describes "
+                        "a problem unrelated to the procedure.",
+                        "If the E/M was routine pre-procedure work, request removal of modifier -25 "
+                        "and resubmission.",
+                    ],
+                    could_be_correct_if=[
+                        "The provider evaluated and managed a separate, significant medical condition "
+                        "during the same encounter (e.g., managing hypertension during a minor procedure visit).",
+                        "The clinical note clearly documents the distinct E/M service.",
+                        "Your insurer already reviewed and confirmed the modifier is appropriate.",
+                    ],
+                    evidence=[
+                        f"E/M CPT {em_item.cpt_code.strip().upper()} with modifier -25 billed "
+                        f"alongside procedure(s) {procedure_codes} on claim {claim.claim_id}",
+                        f"E/M billed amount: {_fmt_usd(em_billed)}",
+                    ],
+                    missing_data_points=missing_data_points,
+                    **_appeal_deadline_fields(claim.visit_date),
+                )
+            )
 
     return opportunities
