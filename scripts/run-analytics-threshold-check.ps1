@@ -26,7 +26,7 @@ function Get-ApiUri {
 
 $funnelUri = Get-ApiUri -Base $ApiBase -Path "api/analytics/funnel-7d" -ApiKey $AnalyticsApiKey
 Write-Host "Checking analytics thresholds against $ApiBase" -ForegroundColor Cyan
-$funnel = Invoke-RestMethod -Uri $funnelUri -Method GET -TimeoutSec 30
+$funnel = Invoke-RestMethod -Uri $funnelUri -Method GET -TimeoutSec 60
 
 $views = [int]($funnel.counts.results_page_viewed)
 $payments = [int]($funnel.counts.payment_completed)

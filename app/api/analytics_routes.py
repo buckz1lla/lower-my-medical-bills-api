@@ -126,7 +126,38 @@ def _empty_event_counts() -> Dict[str, int]:
     return {name: 0 for name in TRACKED_EVENTS}
 
 
+def _read_day_event_counts_from_supabase(day_str: str) -> Optional[Dict[str, int]]:
+    """Query Supabase for event counts for a given day. Returns None when unavailable or on error."""
+    if not supabase_client:
+        return None
+    try:
+        start = f"{day_str}T00:00:00"
+        end = f"{day_str}T23:59:59.999999"
+        result = (
+            supabase_client.table("events")
+            .select("event_name")
+            .gte("timestamp", start)
+            .lte("timestamp", end)
+            .execute()
+        )
+        counts = _empty_event_counts()
+        for row in result.data or []:
+            name = row.get("event_name", "")
+            if name in counts:
+                counts[name] += 1
+        return counts
+    except Exception as e:
+        print(f"Supabase read error for {day_str}: {e}")
+        return None
+
+
 def _read_day_event_counts(day_str: str) -> Dict[str, int]:
+    # Prefer Supabase when available — matches the write path
+    supabase_counts = _read_day_event_counts_from_supabase(day_str)
+    if supabase_counts is not None:
+        return supabase_counts
+
+    # Fall back to local file
     analytics_dir = _analytics_dir()
     log_file = analytics_dir / f"analytics-{day_str}.jsonl"
     counts = _empty_event_counts()
