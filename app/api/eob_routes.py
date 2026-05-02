@@ -11,6 +11,10 @@ from app.store import eob_analyses, initialize_analysis_payment, payment_status_
 
 router = APIRouter()
 
+# In-memory outcome store: analysis_id -> list[AppealOutcome]
+# Keyed by (analysis_id, opportunity_id) so subsequent POSTs overwrite earlier ones.
+_outcome_store: dict[str, dict[str, schemas.AppealOutcome]] = {}
+
 @router.post("/upload", response_model=schemas.EOBUploadResponse)
 async def upload_eob(
     file: UploadFile = File(...),
@@ -226,4 +230,47 @@ async def get_appeal_templates(analysis_id: str):
             "negotiation_talking_points": "Reference these points if you're negotiating directly with the provider about costs."
         }
     }
+
+
+@router.post("/outcomes", response_model=schemas.AppealOutcomeResponse)
+async def record_outcome(payload: schemas.AppealOutcomeCreate):
+    """
+    Record or update the outcome for a savings opportunity.
+
+    Callers should POST whenever a user marks an opportunity as
+    Won / Lost / In Progress / Not Tried.  Subsequent POSTs for the same
+    (analysis_id, opportunity_id) pair overwrite the earlier record.
+    """
+    VALID_OUTCOMES = {"won", "lost", "in_progress", "not_tried"}
+    if payload.outcome not in VALID_OUTCOMES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid outcome '{payload.outcome}'. Must be one of: {', '.join(sorted(VALID_OUTCOMES))}",
+        )
+
+    outcome = schemas.AppealOutcome(
+        **payload.model_dump(),
+        recorded_date=date.today(),
+    )
+
+    analysis_outcomes = _outcome_store.setdefault(payload.analysis_id, {})
+    analysis_outcomes[payload.opportunity_id] = outcome
+
+    return schemas.AppealOutcomeResponse(
+        analysis_id=payload.analysis_id,
+        outcomes=list(analysis_outcomes.values()),
+    )
+
+
+@router.get("/outcomes/{analysis_id}", response_model=schemas.AppealOutcomeResponse)
+async def get_outcomes(analysis_id: str):
+    """
+    Retrieve all recorded appeal outcomes for a given analysis.
+    Returns an empty list when no outcomes have been recorded yet.
+    """
+    analysis_outcomes = _outcome_store.get(analysis_id, {})
+    return schemas.AppealOutcomeResponse(
+        analysis_id=analysis_id,
+        outcomes=list(analysis_outcomes.values()),
+    )
 
