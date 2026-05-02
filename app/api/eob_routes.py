@@ -7,13 +7,15 @@ from typing import Optional
 from app import schemas
 from app.services import eob_analyzer
 from app.services.rule_engine import CARC_CODE_LIBRARY, _normalize_carc_code
-from app.store import eob_analyses, initialize_analysis_payment, payment_status_by_analysis
+from app.store import (
+    eob_analyses,
+    initialize_analysis_payment,
+    payment_status_by_analysis,
+    upsert_outcome,
+    get_outcomes as store_get_outcomes,
+)
 
 router = APIRouter()
-
-# In-memory outcome store: analysis_id -> list[AppealOutcome]
-# Keyed by (analysis_id, opportunity_id) so subsequent POSTs overwrite earlier ones.
-_outcome_store: dict[str, dict[str, schemas.AppealOutcome]] = {}
 
 @router.post("/upload", response_model=schemas.EOBUploadResponse)
 async def upload_eob(
@@ -253,12 +255,15 @@ async def record_outcome(payload: schemas.AppealOutcomeCreate):
         recorded_date=date.today(),
     )
 
-    analysis_outcomes = _outcome_store.setdefault(payload.analysis_id, {})
-    analysis_outcomes[payload.opportunity_id] = outcome
+    stored = upsert_outcome(
+        payload.analysis_id,
+        payload.opportunity_id,
+        outcome.model_dump(mode="json"),
+    )
 
     return schemas.AppealOutcomeResponse(
         analysis_id=payload.analysis_id,
-        outcomes=list(analysis_outcomes.values()),
+        outcomes=[schemas.AppealOutcome(**r) for r in stored],
     )
 
 
@@ -268,9 +273,9 @@ async def get_outcomes(analysis_id: str):
     Retrieve all recorded appeal outcomes for a given analysis.
     Returns an empty list when no outcomes have been recorded yet.
     """
-    analysis_outcomes = _outcome_store.get(analysis_id, {})
+    stored = store_get_outcomes(analysis_id)
     return schemas.AppealOutcomeResponse(
         analysis_id=analysis_id,
-        outcomes=list(analysis_outcomes.values()),
+        outcomes=[schemas.AppealOutcome(**r) for r in stored],
     )
 
