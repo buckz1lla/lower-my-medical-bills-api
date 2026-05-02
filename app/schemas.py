@@ -10,6 +10,7 @@ class LineItem(BaseModel):
     provider_name: str
     service_description: str
     cpt_code: Optional[str] = None  # CPT/HCPCS procedure code for more precise duplicate detection
+    modifier: Optional[str] = None  # Procedure modifier(s), e.g. "-25", "-59", "XU" (comma-separated for multiple)
     billed_amount: float
     allowed_amount: float
     patient_responsibility: float
@@ -69,6 +70,25 @@ class AppealRecommendation(BaseModel):
     success_probability: float  # 0-1
     steps: List[str]
     contact_info: Optional[dict] = None  # phone, email, address
+
+# ===== APPEAL OUTCOME SCHEMAS =====
+
+class AppealOutcomeCreate(BaseModel):
+    """Record an outcome for a specific savings opportunity."""
+    analysis_id: str
+    opportunity_id: str
+    outcome: str  # "won", "lost", "in_progress", "not_tried"
+    notes: Optional[str] = None
+    amount_recovered: Optional[float] = None
+
+class AppealOutcome(AppealOutcomeCreate):
+    """Stored appeal outcome with metadata."""
+    recorded_date: date
+
+class AppealOutcomeResponse(BaseModel):
+    """Response returned when an outcome is recorded or fetched."""
+    analysis_id: str
+    outcomes: List[AppealOutcome]
 
 # ===== EOB ANALYSIS SCHEMAS =====
 
