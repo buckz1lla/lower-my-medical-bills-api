@@ -658,32 +658,54 @@ def _infer_network_status_from_text(text: str):
         "Plan-specific out-of-network benefit design",
     ]
 
+    # Markers that explicitly indicate out-of-network status for the claim
     out_markers = [
         "out-of-network",
         "out of network",
         "non-participating",
         "non participating",
     ]
+    # Markers that explicitly indicate in-network status.
+    # Many payers use abbreviated formats that do NOT include the "in-" prefix:
+    #   - BCBS / Anthem: "Status: Network"
+    #   - UHC: "Network Provider" or "Participating"
+    #   - Cigna: "In-Network" OR "Network"
+    # Order matters — longer/more specific patterns before shorter ones.
     in_markers = [
+        "status: in-network",
+        "status: in network",
+        "status: network",          # BCBS / Anthem short form (e.g. "Status: Network")
         "in-network",
         "in network",
+        "network provider",
+        "network benefit",
+        "network rate",
+        "network contractual",
         "participating provider",
+        "network: yes",
     ]
 
     has_out = any(marker in lowered for marker in out_markers)
     has_in = any(marker in lowered for marker in in_markers)
 
-    if has_out and not has_in:
-        evidence.append("Found explicit out-of-network marker in uploaded text")
-        return "out_of_network", "high", evidence, []
-
-    if has_in and not has_out:
-        evidence.append("Found explicit in-network marker in uploaded text")
-        return "in_network", "high", evidence, []
-
+    # When both markers appear, the document likely contains disclaimers/glossary
+    # text about out-of-network coverage alongside an in-network claim status.
+    # Return "unknown" rather than making a confident wrong call.
     if has_in and has_out:
         evidence.append("Conflicting in-network and out-of-network markers found in uploaded text")
         return "unknown", "medium", evidence, missing_data_points
+
+    if has_in:
+        evidence.append("Found explicit in-network marker in uploaded text")
+        return "in_network", "high", evidence, []
+
+    if has_out:
+        # Downgrade to "medium" for text-only out-of-network detection — EOB fine print
+        # commonly mentions "out of network" in benefit explanations even when the claim
+        # itself is in-network. Medium confidence means the rule-engine guard will not fire
+        # without a corroborating structured signal.
+        evidence.append("Found out-of-network marker in uploaded text (may be from fine print)")
+        return "out_of_network", "medium", evidence, missing_data_points
 
     return "unknown", "low", evidence, missing_data_points
 

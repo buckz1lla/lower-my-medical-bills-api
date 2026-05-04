@@ -884,8 +884,11 @@ def _rule_out_of_network(claims: List[schemas.ClaimGroup]) -> List[schemas.Savin
         if claim.total_patient_responsibility <= 0:
             continue
 
-        # Safety guard: only raise out-of-network opportunities when status is explicit.
-        if network_status != "out_of_network" or network_confidence == "low":
+        # Only fire when network status is explicitly out-of-network AND we have
+        # high confidence in that determination. Text-based detection (medium) is
+        # not sufficient — EOB fine print commonly references out-of-network coverage
+        # even for in-network claims, which would cause false positives.
+        if network_status != "out_of_network" or network_confidence != "high":
             continue
 
         missing_data_points = [
