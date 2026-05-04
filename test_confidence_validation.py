@@ -838,6 +838,56 @@ TEST_CASES: List[Dict[str, Any]] = [
             "Modifier abuse rule must NOT also fire (no modifier present)."
         ),
     },
+    # -----------------------------------------------------------------------
+    # CLM-035 / CLM-036: out-of-network false-positive regression cases
+    # Mirrors the real-world bug: EOB says "Status: Network" (in-network claim)
+    # but PDF fine print contains "out of network" in disclaimers.  The rule
+    # must NOT fire when network_confidence is "medium" (text-only detection).
+    # -----------------------------------------------------------------------
+    {
+        "name": "OON false-positive: in-network claim, medium-confidence text detection — must not flag",
+        "expected_flag": False,
+        "expected_types_absent": ["out_of_network"],
+        "claims": [
+            make_claim(
+                claim_id="CLM-035",
+                visit_date=date(2026, 1, 29),
+                in_network=True,
+                provider_name="T Bullard Anesthesia",
+                network_status="out_of_network",
+                network_confidence="medium",   # text-based detection — not reliable enough
+                line_items=[
+                    make_line_item("Anesthesia (00840)", 822.0),
+                ],
+            )
+        ],
+        "notes": (
+            "Simulates BCBS EOB: claim is in-network (Status: Network) but PDF text "
+            "contains 'out of network' in fine print. Parser emits network_status="
+            "out_of_network with confidence=medium. Rule must NOT fire."
+        ),
+    },
+    {
+        "name": "OON true positive: explicit out-of-network, high confidence — should flag",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-036",
+                visit_date=date(2026, 1, 29),
+                in_network=False,
+                provider_name="Out-of-Network Specialist",
+                network_status="out_of_network",
+                network_confidence="high",     # structured/explicit field — reliable
+                line_items=[
+                    make_line_item("Office Visit (99213)", 500.0),
+                ],
+            )
+        ],
+        "notes": (
+            "Explicit out-of-network from structured field with high confidence. "
+            "Rule should fire and flag balance billing opportunity."
+        ),
+    },
 ]
 
 

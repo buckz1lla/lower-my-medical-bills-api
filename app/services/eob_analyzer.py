@@ -658,32 +658,73 @@ def _infer_network_status_from_text(text: str):
         "Plan-specific out-of-network benefit design",
     ]
 
-    out_markers = [
+    # Markers that explicitly indicate out-of-network status for the claim.
+    # Split into two tiers:
+    # - "structured" markers appear in labeled fields (e.g. "Status: Out-of-Network")
+    #   and are reliable → confidence "high"
+    # - "body" markers are bare phrases that appear in fine print / disclaimers on
+    #   virtually every EOB regardless of the claim's network status → confidence "medium"
+    out_markers_structured = [
+        "status: out-of-network",
+        "status: out of network",
+        "status: non-participating",
+        "network: out-of-network",
+        "network: out of network",
+        "network status: out-of-network",
+        "network status: out of network",
+    ]
+    out_markers_body = [
         "out-of-network",
         "out of network",
         "non-participating",
         "non participating",
     ]
+    # Markers that explicitly indicate in-network status.
+    # Many payers use abbreviated formats that do NOT include the "in-" prefix:
+    #   - BCBS / Anthem: "Status: Network"
+    #   - UHC: "Network Provider" or "Participating"
+    #   - Cigna: "In-Network" OR "Network"
+    # Order matters — longer/more specific patterns before shorter ones.
     in_markers = [
+        "status: in-network",
+        "status: in network",
+        "status: network",          # BCBS / Anthem short form (e.g. "Status: Network")
         "in-network",
         "in network",
+        "network provider",
+        "network benefit",
+        "network rate",
+        "network contractual",
         "participating provider",
+        "network: yes",
     ]
 
-    has_out = any(marker in lowered for marker in out_markers)
+    has_out_structured = any(marker in lowered for marker in out_markers_structured)
+    has_out_body = any(marker in lowered for marker in out_markers_body)
+    has_out = has_out_structured or has_out_body
     has_in = any(marker in lowered for marker in in_markers)
 
-    if has_out and not has_in:
-        evidence.append("Found explicit out-of-network marker in uploaded text")
-        return "out_of_network", "high", evidence, []
-
-    if has_in and not has_out:
-        evidence.append("Found explicit in-network marker in uploaded text")
-        return "in_network", "high", evidence, []
-
+    # When both markers appear, the document likely contains disclaimers/glossary
+    # text about out-of-network coverage alongside an in-network claim status.
+    # Return "unknown" rather than making a confident wrong call.
     if has_in and has_out:
         evidence.append("Conflicting in-network and out-of-network markers found in uploaded text")
         return "unknown", "medium", evidence, missing_data_points
+
+    if has_in:
+        evidence.append("Found explicit in-network marker in uploaded text")
+        return "in_network", "high", evidence, []
+
+    if has_out_structured:
+        # Labeled field (e.g. "Status: Out-of-Network") — reliable
+        evidence.append("Found structured out-of-network status field in uploaded text")
+        return "out_of_network", "high", evidence, []
+
+    if has_out_body:
+        # Bare phrase in body text — commonly appears in disclaimers on in-network EOBs.
+        # Downgrade to medium so the rule-engine guard does not fire.
+        evidence.append("Found out-of-network phrase in uploaded text (may be from fine print)")
+        return "out_of_network", "medium", evidence, missing_data_points
 
     return "unknown", "low", evidence, missing_data_points
 
