@@ -658,8 +658,22 @@ def _infer_network_status_from_text(text: str):
         "Plan-specific out-of-network benefit design",
     ]
 
-    # Markers that explicitly indicate out-of-network status for the claim
-    out_markers = [
+    # Markers that explicitly indicate out-of-network status for the claim.
+    # Split into two tiers:
+    # - "structured" markers appear in labeled fields (e.g. "Status: Out-of-Network")
+    #   and are reliable → confidence "high"
+    # - "body" markers are bare phrases that appear in fine print / disclaimers on
+    #   virtually every EOB regardless of the claim's network status → confidence "medium"
+    out_markers_structured = [
+        "status: out-of-network",
+        "status: out of network",
+        "status: non-participating",
+        "network: out-of-network",
+        "network: out of network",
+        "network status: out-of-network",
+        "network status: out of network",
+    ]
+    out_markers_body = [
         "out-of-network",
         "out of network",
         "non-participating",
@@ -685,7 +699,9 @@ def _infer_network_status_from_text(text: str):
         "network: yes",
     ]
 
-    has_out = any(marker in lowered for marker in out_markers)
+    has_out_structured = any(marker in lowered for marker in out_markers_structured)
+    has_out_body = any(marker in lowered for marker in out_markers_body)
+    has_out = has_out_structured or has_out_body
     has_in = any(marker in lowered for marker in in_markers)
 
     # When both markers appear, the document likely contains disclaimers/glossary
@@ -699,12 +715,15 @@ def _infer_network_status_from_text(text: str):
         evidence.append("Found explicit in-network marker in uploaded text")
         return "in_network", "high", evidence, []
 
-    if has_out:
-        # Downgrade to "medium" for text-only out-of-network detection — EOB fine print
-        # commonly mentions "out of network" in benefit explanations even when the claim
-        # itself is in-network. Medium confidence means the rule-engine guard will not fire
-        # without a corroborating structured signal.
-        evidence.append("Found out-of-network marker in uploaded text (may be from fine print)")
+    if has_out_structured:
+        # Labeled field (e.g. "Status: Out-of-Network") — reliable
+        evidence.append("Found structured out-of-network status field in uploaded text")
+        return "out_of_network", "high", evidence, []
+
+    if has_out_body:
+        # Bare phrase in body text — commonly appears in disclaimers on in-network EOBs.
+        # Downgrade to medium so the rule-engine guard does not fire.
+        evidence.append("Found out-of-network phrase in uploaded text (may be from fine print)")
         return "out_of_network", "medium", evidence, missing_data_points
 
     return "unknown", "low", evidence, missing_data_points
