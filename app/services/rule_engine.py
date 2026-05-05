@@ -945,6 +945,13 @@ def _rule_denied_claim_appeal(claims: List[schemas.ClaimGroup]) -> List[schemas.
             # Skip items already handled by _rule_reason_code_analysis to avoid duplicates
             if _get_carc_data(item.reason_code) is not None:
                 continue
+            # Skip hard plan exclusions — "plan does not cover" denials are contract
+            # exclusions, not administrative errors, and appeals rarely succeed.
+            if item.notes == "plan_exclusion":
+                continue
+            # Skip items where the patient owes nothing — no financial recovery possible.
+            if item.patient_responsibility <= 0:
+                continue
 
             missing_data_points = [
                 "Full denial reason detail from insurer",
@@ -960,7 +967,7 @@ def _rule_denied_claim_appeal(claims: List[schemas.ClaimGroup]) -> List[schemas.
                     type="appeal",
                     claim_id=claim.claim_id,
                     severity="medium",
-                    estimated_savings=item.billed_amount * 0.6,
+                    estimated_savings=round(item.patient_responsibility * 0.6, 2),
                     description=f"Denied claim may be appealable: {item.service_description}",
                     recommended_action="Request a full explanation of benefits with the denial reason code. Submit an appeal with medical necessity documentation from your provider.",
                     difficulty_level="medium",

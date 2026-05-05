@@ -888,6 +888,72 @@ TEST_CASES: List[Dict[str, Any]] = [
             "Rule should fire and flag balance billing opportunity."
         ),
     },
+    # ── CLM-037: TN — denied item tagged plan_exclusion must NOT trigger appeal ────
+    {
+        "name": "CLM-037: TN — hard plan exclusion should not generate appeal",
+        "expected_flag": False,
+        "expected_types_absent": ["appeal"],
+        "claims": [
+            make_claim(
+                claim_id="CLM-037",
+                visit_date=date(2025, 11, 11),
+                in_network=None,
+                network_status="out_of_network",
+                network_confidence="high",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2025, 11, 11),
+                        provider_name="M TEMPLE",
+                        service_description="Hearing Aid",
+                        billed_amount=328.0,
+                        allowed_amount=53.20,
+                        patient_responsibility=297.0,
+                        insurance_paid=0.0,
+                        status="denied",
+                        reason_code="4W",
+                        # Plan explicitly does not cover hearing aids — hard exclusion.
+                        # Appeal rule must be suppressed.
+                        notes="plan_exclusion",
+                    )
+                ],
+            )
+        ],
+        "notes": (
+            "Hearing aid claim denied with plan_exclusion note (4W code = plan does not cover). "
+            "No appeal opportunity should be generated — hard contract exclusion."
+        ),
+    },
+    # ── CLM-038: TN — patient owes $0 on denied item, no financial recovery possible ─
+    {
+        "name": "CLM-038: TN — denied item with $0 patient responsibility must NOT trigger appeal",
+        "expected_flag": False,
+        "expected_types_absent": ["appeal"],
+        "claims": [
+            make_claim(
+                claim_id="CLM-038",
+                visit_date=date(2025, 11, 11),
+                in_network=True,
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2025, 11, 11),
+                        provider_name="Test Provider",
+                        service_description="Duplicate unit denied (HH)",
+                        billed_amount=150.0,
+                        allowed_amount=0.0,
+                        patient_responsibility=0.0,
+                        insurance_paid=0.0,
+                        status="denied",
+                        reason_code="HH",
+                        notes=None,
+                    )
+                ],
+            )
+        ],
+        "notes": (
+            "Denied item where patient owes $0 (insurance absorbed / above-daily-limit). "
+            "No financial recovery possible — appeal suggestion must not fire."
+        ),
+    },
 ]
 
 
