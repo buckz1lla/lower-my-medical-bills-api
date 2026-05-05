@@ -734,10 +734,39 @@ def _infer_network_status_from_text(text: str):
         "network: yes",
     ]
 
-    has_out_structured = any(marker in lowered for marker in out_markers_structured)
+    # Regex-based check for structured status/network field patterns.
+    # PDF renderers vary in spacing around colons (e.g. "Status:Out-of-network"
+    # vs "Status: Out-of-network"), so substring matching is not sufficient.
+    # Covers: "Status: Out-of-Network", "Status:Out of Network",
+    #         "Network Status: Out-of-Network", "Network: Out-of-Network", etc.
+    _OON_STATUS_FIELD_RE = re.compile(
+        r"""
+        (?:status|network\s*status|network)   # field label
+        \s*:\s*                               # colon with optional spaces
+        (?:out[\s\-]of[\s\-]network|non[\s\-]participating)
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
+    _IN_STATUS_FIELD_RE = re.compile(
+        r"""
+        (?:status|network\s*status|network)   # field label
+        \s*:\s*                               # colon with optional spaces
+        (?:in[\s\-]network|network|participating)
+        """,
+        re.IGNORECASE | re.VERBOSE,
+    )
+
+    has_out_structured = (
+        any(marker in lowered for marker in out_markers_structured)
+        or bool(_OON_STATUS_FIELD_RE.search(lowered))
+    )
     has_out_body = any(marker in lowered for marker in out_markers_body)
     has_out = has_out_structured or has_out_body
-    has_in = any(marker in lowered for marker in in_markers)
+    # Structured in-network match takes precedence over simple substring check to
+    # avoid "network provider" in a glossary sentence triggering has_in.
+    has_in_structured = bool(_IN_STATUS_FIELD_RE.search(lowered))
+    has_in_body = any(marker in lowered for marker in in_markers)
+    has_in = has_in_structured or has_in_body
 
     # When both markers appear, the document likely contains disclaimers/glossary
     # text about out-of-network coverage alongside an in-network claim status.
