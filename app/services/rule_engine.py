@@ -892,6 +892,17 @@ def _rule_out_of_network(claims: List[schemas.ClaimGroup]) -> List[schemas.Savin
         if network_status != "out_of_network" or network_confidence != "high":
             continue
 
+        # Yield to the more specific _rule_oon_referred_ancillary for lab / imaging /
+        # anesthesia claims — those rules surface targeted action steps that are
+        # more useful than the generic OON guidance here.
+        service_text = " ".join([
+            claim.facility_name or "",
+            claim.provider_name or "",
+            *[item.service_description for item in claim.line_items],
+        ]).lower()
+        if any(kw in service_text for kw in _REFERRED_ANCILLARY_KEYWORDS):
+            continue
+
         missing_data_points = [
             "Current deductible met amount",
             "Out-of-pocket accumulator status",
