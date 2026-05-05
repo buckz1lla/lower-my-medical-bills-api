@@ -994,11 +994,14 @@ def _rule_oon_referred_ancillary(claims: List[schemas.ClaimGroup]) -> List[schem
         if is_emergency:
             continue
 
+        # 3 missing points (not 4): this rule already requires network_confidence="high"
+        # (a labeled status field — not body text), so the OON status itself is certain.
+        # The remaining unknowns are about the appeal argument strength, not the opportunity.
+        # 3 missing points keeps base 0.68 uncapped → score=0.68 → confidence="medium".
         missing_data_points = [
             "Ordering provider name (who referred/ordered the service)",
             "Whether the referring provider is in-network",
             "Date the OON provider's contract with your insurer was terminated",
-            "Whether you received written notice of the network change",
         ]
         score = _apply_data_confidence_guard(0.68, missing_data_points)
 
