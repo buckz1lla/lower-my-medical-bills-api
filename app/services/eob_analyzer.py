@@ -768,14 +768,34 @@ def _infer_network_status_from_text(text: str):
     has_in_body = any(marker in lowered for marker in in_markers)
     has_in = has_in_structured or has_in_body
 
-    # When both markers appear, the document likely contains disclaimers/glossary
-    # text about out-of-network coverage alongside an in-network claim status.
-    # Return "unknown" rather than making a confident wrong call.
-    if has_in and has_out:
-        evidence.append("Conflicting in-network and out-of-network markers found in uploaded text")
+    # Conflict resolution: structured (labeled-field) signals are more reliable than
+    # body (bare-phrase) signals. Body phrases like "network provider" or "participating
+    # provider" appear in glossaries and footers on virtually every EOB regardless of
+    # actual network status, so they should NOT override a structured labeled field.
+    #
+    #   structured OON  +  structured IN  → genuine conflict (two labeled fields) → unknown
+    #   structured OON  +  body IN        → trust the labeled OON field → out_of_network HIGH
+    #   body OON        +  structured IN  → trust the labeled IN field → in_network HIGH
+    #   body OON        +  body IN        → ambiguous bare phrases on both sides → unknown
+    if has_out_structured and has_in_structured:
+        evidence.append("Conflicting structured in-network and out-of-network fields found in uploaded text")
         return "unknown", "medium", evidence, missing_data_points
 
-    if has_in:
+    if has_out_structured and has_in_body:
+        # Labeled OON field beats bare in-network phrase (glossary / footer text).
+        evidence.append("Found structured out-of-network status field in uploaded text (in-network phrase from body/footer ignored)")
+        return "out_of_network", "high", evidence, []
+
+    if has_in_structured and has_out_body:
+        # Labeled IN field beats bare OON phrase.
+        evidence.append("Found structured in-network status field in uploaded text (out-of-network phrase from body/footer ignored)")
+        return "in_network", "high", evidence, []
+
+    if has_out_body and has_in_body:
+        evidence.append("Conflicting in-network and out-of-network phrases found in body text")
+        return "unknown", "medium", evidence, missing_data_points
+
+    if has_in_structured or has_in_body:
         evidence.append("Found explicit in-network marker in uploaded text")
         return "in_network", "high", evidence, []
 
