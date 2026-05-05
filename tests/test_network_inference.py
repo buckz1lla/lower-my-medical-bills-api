@@ -14,6 +14,7 @@ class NetworkInferenceTests(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_infer_conflicting_markers_as_unknown(self):
+        # Both are bare body phrases — should stay unknown/medium
         status, confidence, evidence, missing = _infer_network_status_from_text(
             "This page says in-network in one section and out-of-network in another section."
         )
@@ -21,6 +22,37 @@ class NetworkInferenceTests(unittest.TestCase):
         self.assertEqual(confidence, "medium")
         self.assertTrue(evidence)
         self.assertTrue(missing)
+
+    def test_structured_oon_beats_body_in_network(self):
+        # Labeled "Status: Out-of-Network" field should win over bare "network provider"
+        # in glossary — this is the Ashley / WakeMed lab scenario.
+        status, confidence, evidence, missing = _infer_network_status_from_text(
+            "Status: Out-of-Network\n"
+            "Your network provider rate was applied where applicable.\n"
+            "Participating provider benefits may differ."
+        )
+        self.assertEqual(status, "out_of_network")
+        self.assertEqual(confidence, "high")
+        self.assertEqual(missing, [])
+
+    def test_structured_in_beats_body_oon(self):
+        # Labeled "Status: In-Network" field should win over bare "out-of-network"
+        # phrase that appears in a disclaimer.
+        status, confidence, evidence, missing = _infer_network_status_from_text(
+            "Status: In-Network\n"
+            "Out-of-network services are not covered under this benefit."
+        )
+        self.assertEqual(status, "in_network")
+        self.assertEqual(confidence, "high")
+        self.assertEqual(missing, [])
+
+    def test_two_structured_fields_conflict(self):
+        # Two explicit labeled fields that disagree → unknown
+        status, confidence, evidence, missing = _infer_network_status_from_text(
+            "Status: Out-of-Network\nNetwork Status: In-Network"
+        )
+        self.assertEqual(status, "unknown")
+        self.assertEqual(confidence, "medium")
 
     def test_csv_explicit_unknown_overrides_legacy_in_network_false(self):
         csv_text = (
