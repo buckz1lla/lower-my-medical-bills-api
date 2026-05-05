@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.eob_analyzer import _infer_network_status_from_text, _parse_csv_claims
+from app.services.eob_analyzer import _infer_network_status_from_text, _parse_csv_claims, _parse_text_claim
 
 
 class NetworkInferenceTests(unittest.TestCase):
@@ -55,3 +55,66 @@ class NetworkInferenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TextParserAmountTests(unittest.TestCase):
+    """
+    Regression tests for _parse_text_claim amount extraction.
+    Wide-column EOBs (e.g. 9-column hearing-aid tables) previously had their
+    patient_responsibility truncated because the total-row window was too narrow.
+    """
+
+    # Minimal representation of the VIOLET hearing-aid EOB text.
+    # The 'Total amount' row has 9 money columns; the last ($297.00) is patient responsibility.
+    _VIOLET_EOB = (
+        "Claim detail for VIOLET\n"
+        "Provider: M TEMPLE\n"
+        "Status: Out-of-network\n"
+        "11/11/2025\n"
+        "Services received\n"
+        "HEARING AID 11/11/2025\n"
+        "Billed $266.00 Amount saved $0.00 Plan allowed $53.20 "
+        "Your plan paid $0.00 Applied to deductible $53.20 "
+        "Copay $0.00 Coinsurance $0.00 Plan does not cover $212.80 "
+        "Amount you owe $266.00\n"
+        "HEARING AID 11/11/2025\n"
+        "Billed $31.00 Amount saved $31.00 Plan allowed $0.00 "
+        "Your plan paid $0.00 Applied to deductible $0.00 "
+        "Copay $0.00 Coinsurance $0.00 Plan does not cover $0.00 "
+        "Amount you owe $0.00\n"
+        "HEARING AID 11/11/2025\n"
+        "Billed $31.00 Amount saved $0.00 Plan allowed $0.00 "
+        "Your plan paid $0.00 Applied to deductible $0.00 "
+        "Copay $0.00 Coinsurance $0.00 Plan does not cover $31.00 "
+        "Amount you owe $31.00\n"
+        "Total amount $328.00 $31.00 $53.20 $0.00 $53.20 $0.00 $0.00 $243.80 $297.00\n"
+        "Explanation of your claim processing codes\n"
+        "1L – AN OUT-OF-NETWORK HEALTH CARE PROFESSIONAL OR FACILITY PROVIDED THESE SERVICES.\n"
+        "HH – THIS SERVICE HAS BEEN DENIED. THE NUMBER OF UNITS BILLED IS MORE THAN THE MAXIMUM.\n"
+        "4W – YOUR PLAN DOES NOT COVER CHARGES FOR HEARING AIDS. THEREFORE, NO BENEFITS ARE PAYABLE.\n"
+        "IK – THE UNIT(S) FOR THIS SERVICE IS WITHIN THE TYPICAL FREQUENCY PER DAY.\n"
+    )
+
+    def test_patient_responsibility_wide_table(self):
+        """$297.00 must be parsed as patient_responsibility, not $53.20."""
+        claim = _parse_text_claim(self._VIOLET_EOB, "violet_eob.pdf", "test1234")
+        self.assertIsNotNone(claim)
+        self.assertAlmostEqual(claim.total_patient_responsibility, 297.00, places=2)
+
+    def test_total_billed_wide_table(self):
+        """$328.00 must be parsed as total_billed."""
+        claim = _parse_text_claim(self._VIOLET_EOB, "violet_eob.pdf", "test1234")
+        self.assertIsNotNone(claim)
+        self.assertAlmostEqual(claim.total_billed, 328.00, places=2)
+
+    def test_status_not_denied_from_glossary(self):
+        """'denied' in the code glossary footer must not set status='denied' on the claim."""
+        claim = _parse_text_claim(self._VIOLET_EOB, "violet_eob.pdf", "test1234")
+        self.assertIsNotNone(claim)
+        self.assertEqual(claim.line_items[0].status, "paid")
+
+    def test_plan_exclusion_detected(self):
+        """'no benefits are payable' phrase must set notes='plan_exclusion' on the line item."""
+        claim = _parse_text_claim(self._VIOLET_EOB, "violet_eob.pdf", "test1234")
+        self.assertIsNotNone(claim)
+        self.assertEqual(claim.line_items[0].notes, "plan_exclusion")
