@@ -390,6 +390,29 @@ def _extract_total_row_amounts(text: str) -> List[float]:
     return []
 
 
+# Regex to detect the primary service category from raw EOB text.
+# Used by _parse_text_claim so that line items carry an accurate
+# service_description — enabling downstream rules (_rule_oon_referred_ancillary,
+# _rule_out_of_network dedup) to keyword-match correctly.
+_SERVICE_TYPE_RE = re.compile(
+    r"\b("
+    r"laboratory\s+services?|lab(?:oratory)?\s+(?:service|test|panel|work)|"
+    r"office\s+visit|office\s+consultation|specialist\s+(?:visit|consult(?:ation)?)|consultation|"
+    r"emergency\s+(?:room|department|services?|care)|urgent\s+care|"
+    r"physical\s+therapy|occupational\s+therapy|speech\s+therapy|"
+    r"radiology|diagnostic\s+imaging|imaging\s+services?|x-?ray|"
+    r"mri|ct\s+scan|pet\s+scan|nuclear\s+medicine|ultrasound|mammogram|"
+    r"anesthesia(?:logy)?|pathology|pathological\s+exam|"
+    r"inpatient\s+(?:stay|services?|admission)|outpatient\s+(?:surgery|procedure|services?)|"
+    r"surgical\s+(?:procedure|services?)|surgery|"
+    r"mental\s+health|behavioral\s+health|"
+    r"preventive\s+care|wellness\s+visit|annual\s+(?:exam|physical)|"
+    r"hearing\s+aid|vision\s+(?:exam|care)|dental\s+(?:exam|care)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
 def _parse_text_claim(text: str, file_name: str, analysis_id: str):
     if not text or len(text.strip()) < 20:
         return None
@@ -503,10 +526,21 @@ def _parse_text_claim(text: str, file_name: str, analysis_id: str):
     plan_exclusion_detected = any(phrase in exclusion_text for phrase in _PLAN_EXCLUSION_PHRASES)
     line_item_notes = "plan_exclusion" if plan_exclusion_detected else None
 
+    # Try to extract the actual service category name from the EOB text so that
+    # downstream rules can keyword-match against it (e.g. _rule_oon_referred_ancillary).
+    # Search only the claim section (before the code glossary) to avoid false matches
+    # on explanation text like "V6 – A HEALTH CARE PROFESSIONAL... LABORATORY...".
+    service_type_match = _SERVICE_TYPE_RE.search(claim_section)
+    service_description = (
+        service_type_match.group(0).strip().title()
+        if service_type_match
+        else "Service from uploaded EOB"
+    )
+
     line_item = schemas.LineItem(
         service_date=visit_date,
         provider_name=provider_name,
-        service_description="Service line parsed from uploaded EOB",
+        service_description=service_description,
         billed_amount=round(total_billed, 2),
         allowed_amount=round(plan_allowed, 2),
         patient_responsibility=round(patient_resp, 2),
