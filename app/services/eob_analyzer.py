@@ -467,7 +467,36 @@ def _parse_text_claim(text: str, file_name: str, analysis_id: str):
 
     network_status, network_confidence, network_evidence, network_missing_data_points = _infer_network_status_from_text(text)
     in_network = True if network_status == "in_network" else False if network_status == "out_of_network" else None
-    status = "denied" if "denied" in text.lower() else "paid"
+
+    # Split at the "Explanation of your claim processing codes" section so that
+    # code-definition text (e.g. "HH – THIS SERVICE HAS BEEN DENIED") never
+    # incorrectly drives the claim status.  Denial keywords in code glossaries
+    # describe what the code means in general, not the status of this specific
+    # claim.
+    explanation_boundary = re.search(
+        r"explanation\s+of\s+your\s+claim\s+processing\s+codes?",
+        text,
+        re.IGNORECASE,
+    )
+    claim_section = text[: explanation_boundary.start()] if explanation_boundary else text
+    status = "denied" if re.search(r"\bdenied\b", claim_section, re.IGNORECASE) else "paid"
+
+    # Detect plan exclusion language — phrases like "plan does not cover" or
+    # "no benefits are payable" mean the denial is a hard contract exclusion.
+    # Tag the line item so the appeal rule can suppress its suggestion; appealing
+    # a hard exclusion is almost never successful.
+    _PLAN_EXCLUSION_PHRASES = [
+        "plan does not cover",
+        "does not cover",
+        "no benefits are payable",
+        "not a covered benefit",
+        "not covered under your plan",
+        "benefit not covered",
+        "excluded from coverage",
+    ]
+    exclusion_text = text.lower()
+    plan_exclusion_detected = any(phrase in exclusion_text for phrase in _PLAN_EXCLUSION_PHRASES)
+    line_item_notes = "plan_exclusion" if plan_exclusion_detected else None
 
     line_item = schemas.LineItem(
         service_date=visit_date,
@@ -479,6 +508,7 @@ def _parse_text_claim(text: str, file_name: str, analysis_id: str):
         insurance_paid=round(insurance_paid, 2),
         status=status,
         reason_code=reason_code,
+        notes=line_item_notes,
     )
 
     return schemas.ClaimGroup(
