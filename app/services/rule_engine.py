@@ -462,6 +462,7 @@ def evaluate_claims(
     opportunities.extend(_rule_reason_code_analysis(claims))
     opportunities.extend(_rule_duplicate_charge(claims))
     opportunities.extend(_rule_out_of_network(claims))
+    opportunities.extend(_rule_oon_referred_ancillary(claims))
     opportunities.extend(_rule_no_surprises_act(claims))
     opportunities.extend(_rule_upcoding_signal(claims))
     opportunities.extend(_rule_denied_claim_appeal(claims))
@@ -925,6 +926,123 @@ def _rule_out_of_network(claims: List[schemas.ClaimGroup]) -> List[schemas.Savin
                 evidence=[
                     "Claim network status is explicitly out_of_network",
                     "Patient responsibility is elevated relative to allowed amount",
+                ],
+                missing_data_points=missing_data_points,
+                **_appeal_deadline_fields(claim.visit_date),
+            )
+        )
+
+    return opportunities
+
+
+# Service categories where the patient typically has no practical choice of
+# provider because the service was ordered/referred by another clinician.
+_REFERRED_ANCILLARY_KEYWORDS = [
+    "laboratory", "lab service", "lab test", "pathology", "pathological",
+    "radiology", "radiological", "imaging", "x-ray", "xray", "mri", "ct scan",
+    "ultrasound", "nuclear medicine", "pet scan", "mammogram",
+    "anesthesia", "anesthesiology",
+    "assistant surgeon", "surgical assistant",
+]
+
+
+def _rule_oon_referred_ancillary(claims: List[schemas.ClaimGroup]) -> List[schemas.SavingsOpportunity]:
+    """
+    Detect OON charges for referred/ancillary services where the patient had
+    no practical choice of provider (labs, imaging, pathology, anesthesia).
+    These are among the strongest grounds for an in-network exception request
+    because the patient could not have reasonably shopped for an in-network
+    alternative at the time of service.
+
+    Suppressed if _rule_no_surprises_act already fires (emergency pathway).
+    """
+    opportunities: List[schemas.SavingsOpportunity] = []
+
+    for claim in claims:
+        if claim.network_status != "out_of_network":
+            continue
+        if claim.total_patient_responsibility <= 50:
+            continue
+        # Require explicit high-confidence OON detection — medium confidence means the
+        # OON signal came from body text / disclaimers and may be unreliable.
+        if getattr(claim, "network_confidence", "low") != "high":
+            continue
+
+        service_text = " ".join([
+            claim.facility_name or "",
+            claim.provider_name or "",
+            *[item.service_description for item in claim.line_items],
+        ]).lower()
+
+        is_referred_ancillary = any(kw in service_text for kw in _REFERRED_ANCILLARY_KEYWORDS)
+        if not is_referred_ancillary:
+            continue
+
+        # Skip if the NSA emergency rule already covers this claim — don't duplicate.
+        is_emergency = any(kw in service_text for kw in _NSA_EMERGENCY_KEYWORDS)
+        if is_emergency:
+            continue
+
+        missing_data_points = [
+            "Ordering provider name (who referred/ordered the service)",
+            "Whether the referring provider is in-network",
+            "Date the OON provider's contract with your insurer was terminated",
+            "Whether you received written notice of the network change",
+        ]
+        score = _apply_data_confidence_guard(0.68, missing_data_points)
+
+        opportunities.append(
+            schemas.SavingsOpportunity(
+                opportunity_id=str(uuid.uuid4()),
+                type="out_of_network",
+                claim_id=claim.claim_id,
+                severity="high",
+                estimated_savings=round(claim.total_patient_responsibility * 0.65, 2),
+                description=(
+                    f"Out-of-network charge for referred service at {claim.facility_name or claim.provider_name} "
+                    f"— patient likely had no practical choice of provider."
+                ),
+                recommended_action=(
+                    "Call your insurer and request an in-network exception for referred/ancillary services. "
+                    "State that (1) the service was ordered by your treating provider, not self-selected; "
+                    "(2) you had no reasonable opportunity to choose an in-network alternative; and "
+                    "(3) you were unaware the provider had left the network. Ask them to reprocess "
+                    "the claim at in-network cost-sharing rates."
+                ),
+                difficulty_level="medium",
+                time_estimate_days=45,
+                confidence_score=score,
+                confidence_level=_confidence_level(score),
+                flag_reason=(
+                    "Out-of-network ancillary or referred service — patient had limited or no ability "
+                    "to select an in-network provider. Insurers frequently grant exceptions for these."
+                ),
+                verification_steps=[
+                    "Call the member services number on your insurance card and ask for an 'in-network exception' "
+                    "or 'same-as-in-network' exception for this claim. Reference the claim number.",
+                    "Ask your insurer: 'Was this provider in-network on the date of service, and if not, "
+                    "when was their contract terminated?' — if the contract was recently terminated, you "
+                    "may not have had any reasonable way to know.",
+                    "Ask your ordering provider (the doctor who referred you) to write a brief letter "
+                    "confirming they directed you to this facility — this strengthens the exception request.",
+                    "If your insurer denies the exception, request a formal internal appeal. Cite that "
+                    "you had no meaningful ability to choose an in-network provider for an ordered service.",
+                    "If the appeal is denied, file a complaint with your state insurance commissioner. "
+                    "Many states require insurers to hold patients harmless for inadvertent OON use "
+                    "of referred ancillary services.",
+                    "For future visits, call your insurer's provider directory line before any lab, "
+                    "imaging, or ancillary service to verify the facility is still in-network — "
+                    "network contracts change frequently.",
+                ],
+                could_be_correct_if=[
+                    "You were informed before the service that the provider was out-of-network and agreed.",
+                    "Your plan has no out-of-network benefits at all (HMO without OON coverage).",
+                    "You self-referred to this provider without a clinical referral.",
+                ],
+                evidence=[
+                    "Claim network_status is out_of_network",
+                    "Service type is lab, imaging, pathology, or other referred ancillary category",
+                    f"Patient responsibility of {_fmt_usd(claim.total_patient_responsibility)} is above review threshold",
                 ],
                 missing_data_points=missing_data_points,
                 **_appeal_deadline_fields(claim.visit_date),

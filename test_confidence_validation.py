@@ -954,6 +954,68 @@ TEST_CASES: List[Dict[str, Any]] = [
             "No financial recovery possible — appeal suggestion must not fire."
         ),
     },
+    # ── CLM-039: TP — OON lab/referred services, patient had no provider choice ───
+    {
+        "name": "CLM-039: TP — OON laboratory services should trigger referred-ancillary rule",
+        "expected_flag": True,
+        "claims": [
+            make_claim(
+                claim_id="CLM-039",
+                visit_date=date(2025, 11, 20),
+                in_network=False,
+                network_status="out_of_network",
+                network_confidence="high",
+                provider_name="WAKEMED RALEIGH",
+                line_items=[
+                    schemas.LineItem(
+                        service_date=date(2025, 11, 20),
+                        provider_name="WAKEMED RALEIGH",
+                        service_description="Laboratory Services",
+                        billed_amount=403.0,
+                        allowed_amount=183.54,
+                        patient_responsibility=403.0,
+                        insurance_paid=0.0,
+                        status="paid",
+                        reason_code="V6",
+                        notes=None,
+                    )
+                ],
+            )
+        ],
+        "notes": (
+            "OON lab services at WakeMed — patient went to previously in-network urgent care, "
+            "contract was terminated. Referred ancillary rule must fire with in-network exception guidance."
+        ),
+    },
+    # ── CLM-040: TN — OON specialist visit (self-selected) should NOT fire ancillary rule ─
+    {
+        "name": "CLM-040: TN — OON self-selected specialist must NOT trigger referred-ancillary rule",
+        "expected_flag": False,
+        "expected_types_absent": ["out_of_network"],
+        "claims": [
+            make_claim(
+                claim_id="CLM-040",
+                visit_date=date(2025, 11, 20),
+                in_network=False,
+                network_status="out_of_network",
+                # Medium confidence — text-body match only, no structured status field.
+                # Rule should not fire (guard requires high confidence for generic OON rule).
+                network_confidence="medium",
+                provider_name="Private Specialist MD",
+                line_items=[
+                    make_line_item(
+                        "Office Consultation — self-referred specialist",
+                        350.0,
+                        status="paid",
+                    )
+                ],
+            )
+        ],
+        "notes": (
+            "OON specialist self-selected by patient with only medium-confidence network detection. "
+            "No referred/ancillary keywords — neither OON rule nor ancillary rule should fire."
+        ),
+    },
 ]
 
 
