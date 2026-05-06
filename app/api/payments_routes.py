@@ -293,7 +293,6 @@ async def create_checkout_session(payload: CheckoutSessionRequest):
                         "price_variant": variant,
                     }
                 },
-                timeout=REQUEST_TIMEOUT,
             )
         except stripe.error.RateLimitError as e:
             logger.error(f"Stripe rate limit exceeded: {str(e)}")
