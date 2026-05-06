@@ -17,6 +17,7 @@ outcome_store: dict[str, dict[str, dict]] = {}
 
 _STORE_FILE = Path(__file__).parent.parent / "data" / "payment_state.json"
 _OUTCOME_FILE = Path(__file__).parent.parent / "data" / "outcome_state.json"
+_ANALYSIS_FILE = Path(__file__).parent.parent / "data" / "analysis_state.json"
 
 
 def _save_payment_state() -> None:
@@ -198,5 +199,42 @@ def get_payment_history(analysis_id: str) -> dict:
     }
 
 
+# ===== ANALYSIS PERSISTENCE =====
+
+def _save_analysis_state() -> None:
+    _ANALYSIS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    serializable = {}
+    for aid, analysis in eob_analyses.items():
+        try:
+            serializable[aid] = analysis.model_dump(mode="json")
+        except Exception:
+            pass
+    with open(_ANALYSIS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"analyses": serializable, "updated_at": datetime.utcnow().isoformat()}, f, ensure_ascii=True, indent=2)
+
+
+def _load_analysis_state() -> None:
+    if not _ANALYSIS_FILE.exists():
+        return
+    try:
+        from app.schemas import EOBAnalysis
+        with open(_ANALYSIS_FILE, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        for aid, data in payload.get("analyses", {}).items():
+            try:
+                eob_analyses[aid] = EOBAnalysis.model_validate(data)
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"Warning: Failed to load analysis state: {e}")
+
+
+def save_analysis(analysis_id: str, analysis) -> None:
+    """Store an analysis in memory and persist to disk."""
+    eob_analyses[analysis_id] = analysis
+    _save_analysis_state()
+
+
 _load_payment_state()
 _load_outcome_state()
+_load_analysis_state()

@@ -11,6 +11,7 @@ from app.store import (
     eob_analyses,
     initialize_analysis_payment,
     payment_status_by_analysis,
+    save_analysis,
     upsert_outcome,
     get_outcomes as store_get_outcomes,
 )
@@ -63,7 +64,7 @@ async def upload_eob(
         )
         
         # Store analysis
-        eob_analyses[analysis_id] = analysis
+        save_analysis(analysis_id, analysis)
         initialize_analysis_payment(analysis_id)
         
         return schemas.EOBUploadResponse(
