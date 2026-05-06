@@ -693,13 +693,19 @@ def _rule_upcoding_signal(claims: List[schemas.ClaimGroup]) -> List[schemas.Savi
             ]
             score = _apply_data_confidence_guard(0.60, missing_data_points)
 
+            # Savings = the portion of overcharge above the allowed amount that
+            # the patient is actually bearing. min() caps it at their real
+            # responsibility so we never overstate.
+            overcharge = item.billed_amount - item.allowed_amount
+            upcoding_savings = round(min(overcharge, item.patient_responsibility), 2)
+
             opportunities.append(
                 schemas.SavingsOpportunity(
                     opportunity_id=str(uuid.uuid4()),
                     type="billing_error",
                     claim_id=claim.claim_id,
                     severity="medium",
-                    estimated_savings=round(item.patient_responsibility * 0.5, 2),
+                    estimated_savings=upcoding_savings,
                     description=(
                         f"Billed amount ({_fmt_usd(item.billed_amount)}) is {ratio:.1f}x the allowed amount "
                         f"({_fmt_usd(item.allowed_amount)}) for: {item.service_description}"
