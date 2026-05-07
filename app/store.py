@@ -10,6 +10,7 @@ checkout_session_to_analysis = {}
 processed_webhook_events = {}  # Track processed webhook IDs for idempotency
 refund_records = {}  # Track refunds by analysis_id
 failed_payment_attempts = {}  # Track failed payment attempts for retry logic
+paid_analysis_by_hash: dict[str, str] = {}  # file_hash -> analysis_id that was paid
 
 # Outcome store: {analysis_id: {opportunity_id: {outcome dict}}}
 # Persisted to data/outcome_state.json independently of payment state.
@@ -28,6 +29,7 @@ def _save_payment_state() -> None:
         "processed_webhook_events": processed_webhook_events,
         "refund_records": refund_records,
         "failed_payment_attempts": failed_payment_attempts,
+        "paid_analysis_by_hash": paid_analysis_by_hash,
         "updated_at": datetime.utcnow().isoformat(),
     }
     with open(_STORE_FILE, "w", encoding="utf-8") as f:
@@ -46,6 +48,7 @@ def _load_payment_state() -> None:
         processed_webhook_events.update(payload.get("processed_webhook_events", {}))
         refund_records.update(payload.get("refund_records", {}))
         failed_payment_attempts.update(payload.get("failed_payment_attempts", {}))
+        paid_analysis_by_hash.update(payload.get("paid_analysis_by_hash", {}))
     except Exception as e:
         # Keep startup resilient; file can be recreated on next successful update.
         print(f"Warning: Failed to load payment state: {e}")
@@ -129,6 +132,10 @@ def mark_paid(
     payment_status_by_analysis[analysis_id] = record
     if session_id:
         checkout_session_to_analysis[session_id] = analysis_id
+    # Index by file hash so re-uploads of the same file are recognized as paid
+    analysis = eob_analyses.get(analysis_id)
+    if analysis and getattr(analysis, "file_hash", None):
+        paid_analysis_by_hash[analysis.file_hash] = analysis_id
     _save_payment_state()
     return record, not was_paid
 
@@ -197,6 +204,11 @@ def get_payment_history(analysis_id: str) -> dict:
         "refunds": refund_records.get(analysis_id, []),
         "failed_attempts": failed_payment_attempts.get(analysis_id, []),
     }
+
+
+def get_paid_analysis_id_for_hash(file_hash: str) -> Optional[str]:
+    """Return the analysis_id of a previously paid analysis with the same file hash, or None."""
+    return paid_analysis_by_hash.get(file_hash)
 
 
 # ===== ANALYSIS PERSISTENCE =====

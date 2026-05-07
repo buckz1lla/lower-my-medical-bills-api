@@ -96,6 +96,7 @@ class EOBAnalysis(BaseModel):
     """Complete analysis of an EOB"""
     analysis_id: str
     file_name: str
+    file_hash: Optional[str] = None  # SHA-256 of raw file content; used to detect re-uploads of same file
     upload_date: Optional[date] = None
     analysis_date: date
     claims: List[ClaimGroup]

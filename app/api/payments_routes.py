@@ -19,6 +19,7 @@ from app.store import (
     record_refund,
     record_failed_payment_attempt,
     get_payment_history,
+    get_paid_analysis_id_for_hash,
 )
 from app.utils.validation import (
     is_valid_email,
@@ -344,7 +345,27 @@ async def get_payment_status(analysis_id: str, session_id: str | None = Query(No
     logger.debug(f"Checking payment status for {analysis_id}")
     
     record = payment_status_by_analysis.get(analysis_id, {"status": "unpaid"})
-    
+
+    # If this analysis shows unpaid, check whether the same file hash was paid under a different analysis_id
+    # (handles re-upload scenario: same file → new analysisId → should still be unlocked)
+    if record.get("status") != "paid":
+        analysis = eob_analyses.get(analysis_id)
+        file_hash = getattr(analysis, "file_hash", None) if analysis else None
+        if file_hash:
+            prior_paid_id = get_paid_analysis_id_for_hash(file_hash)
+            if prior_paid_id and prior_paid_id != analysis_id:
+                prior_record = payment_status_by_analysis.get(prior_paid_id, {})
+                if prior_record.get("status") == "paid":
+                    # Carry forward the payment to this analysis_id
+                    record, _ = mark_paid(
+                        analysis_id,
+                        session_id=prior_record.get("checkout_session_id"),
+                        amount_total=prior_record.get("amount_total"),
+                        customer_email=prior_record.get("customer_email"),
+                        price_variant=prior_record.get("price_variant"),
+                    )
+                    logger.info(f"Payment carried forward from {prior_paid_id} to {analysis_id} via file hash")
+
     # If payment isn't marked as complete, try to sync with Stripe
     if record.get("status") != "paid" and session_id:
         if not validate_stripe_session_id(session_id):

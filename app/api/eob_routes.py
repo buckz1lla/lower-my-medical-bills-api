@@ -1,5 +1,6 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Query
 from fastapi.responses import JSONResponse
+import hashlib
 import json
 import uuid
 from datetime import date, datetime
@@ -10,7 +11,10 @@ from app.services.rule_engine import CARC_CODE_LIBRARY, _normalize_carc_code
 from app.store import (
     eob_analyses,
     initialize_analysis_payment,
+    mark_paid,
     payment_status_by_analysis,
+    paid_analysis_by_hash,
+    get_paid_analysis_id_for_hash,
     save_analysis,
     upsert_outcome,
     get_outcomes as store_get_outcomes,
@@ -43,6 +47,9 @@ async def upload_eob(
         # Read file content
         content = await file.read()
         
+        # SHA-256 hash of raw bytes — used to recognize re-uploads of the same file
+        file_hash = hashlib.sha256(content).hexdigest()
+
         # Generate analysis ID
         analysis_id = str(uuid.uuid4())
         
@@ -62,10 +69,29 @@ async def upload_eob(
             analysis_id=analysis_id,
             user_profile=parsed_profile,
         )
-        
+
+        # Attach file hash so payment lookups can recognise re-uploads of the same file
+        analysis.file_hash = file_hash
+
         # Store analysis
         save_analysis(analysis_id, analysis)
-        initialize_analysis_payment(analysis_id)
+
+        # If the same file was previously paid, carry the payment status forward automatically
+        prior_paid_id = get_paid_analysis_id_for_hash(file_hash)
+        if prior_paid_id and prior_paid_id != analysis_id:
+            prior_record = payment_status_by_analysis.get(prior_paid_id, {})
+            if prior_record.get("status") == "paid":
+                mark_paid(
+                    analysis_id,
+                    session_id=prior_record.get("checkout_session_id"),
+                    amount_total=prior_record.get("amount_total"),
+                    customer_email=prior_record.get("customer_email"),
+                    price_variant=prior_record.get("price_variant"),
+                )
+            else:
+                initialize_analysis_payment(analysis_id)
+        else:
+            initialize_analysis_payment(analysis_id)
         
         return schemas.EOBUploadResponse(
             message="EOB file uploaded and analysis started",
