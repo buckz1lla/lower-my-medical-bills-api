@@ -343,10 +343,6 @@ async def get_payment_status(analysis_id: str, session_id: str | None = Query(No
     """Get payment status for an analysis."""
     logger.debug(f"Checking payment status for {analysis_id}")
     
-    if analysis_id not in eob_analyses:
-        logger.warning(f"Analysis not found: {analysis_id}")
-        raise HTTPException(status_code=404, detail="Analysis not found")
-    
     record = payment_status_by_analysis.get(analysis_id, {"status": "unpaid"})
     
     # If payment isn't marked as complete, try to sync with Stripe
