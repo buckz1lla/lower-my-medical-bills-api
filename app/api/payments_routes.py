@@ -468,31 +468,53 @@ async def recover_payment_by_email(payload: RecoverByEmailRequest):
     try:
         _configure_stripe()
 
-        # Search Stripe for any paid session from this email.
-        # Stripe Checkout Session Search uses customer_details.email, not customer_email.
-        results = stripe.checkout.Session.search(
-            query=f"customer_details.email:'{clean_email}' AND payment_status:'paid'",
-            limit=10,
-        )
+        matching_session = None
 
-        if not results.data:
+        # Fast path: look up Stripe Customer record by email, then find their paid sessions.
+        # This works when Stripe created a Customer object during checkout.
+        try:
+            customers = stripe.Customer.list(email=clean_email, limit=5)
+            for customer in customers.data:
+                sessions = stripe.checkout.Session.list(
+                    customer=customer.id,
+                    limit=20,
+                )
+                for s in sessions.data:
+                    if getattr(s, "payment_status", "") == "paid":
+                        matching_session = s
+                        break
+                if matching_session:
+                    break
+        except Exception as e:
+            logger.warning(f"Customer.list fast path failed: {str(e)}")
+
+        # Slow path: list the 100 most recent sessions and match customer_details.email.
+        # Covers guest checkouts where no Customer object was created.
+        if not matching_session:
+            try:
+                all_sessions = stripe.checkout.Session.list(limit=100)
+                for s in all_sessions.data:
+                    if getattr(s, "payment_status", "") != "paid":
+                        continue
+                    details = getattr(s, "customer_details", None)
+                    if not details:
+                        continue
+                    email_val = (
+                        details.get("email") if isinstance(details, dict)
+                        else getattr(details, "email", None)
+                    ) or ""
+                    if email_val.lower() == clean_email:
+                        matching_session = s
+                        break
+            except Exception as e:
+                logger.warning(f"Session.list slow path failed: {str(e)}")
+
+        if not matching_session:
             logger.info(f"No paid Stripe sessions found for email during recovery")
             raise HTTPException(
                 status_code=404,
                 detail="No paid sessions found for that email. Make sure you use the email address you entered at checkout."
             )
-
-        # Any paid session from this Stripe account is valid — we only sell one product.
-        # Prefer sessions with a known price variant in metadata, otherwise take the first.
-        matching_session = None
-        for session in results.data:
-            meta = getattr(session, "metadata", {}) or {}
-            if meta.get("price_variant") in ("control", "test") or getattr(session, "amount_total", 0) > 0:
-                matching_session = session
-                break
-        # Fallback: just take the first paid session
-        if not matching_session:
-            matching_session = results.data[0]
 
         meta = getattr(matching_session, "metadata", {}) or {}
         _mark_paid_and_track(
