@@ -66,6 +66,26 @@ class CheckoutSessionRequest(BaseModel):
         return v
 
 
+class RecoverByEmailRequest(BaseModel):
+    """Request to recover payment access using the customer's Stripe email."""
+    analysis_id: str
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email_field(cls, v):
+        if not v or not isinstance(v, str) or len(v) > 254:
+            raise ValueError("Invalid email")
+        return v.strip().lower()
+
+    @field_validator("analysis_id")
+    @classmethod
+    def validate_analysis_id_field(cls, v):
+        if not v or not isinstance(v, str) or len(v) < 1:
+            raise ValueError("Invalid analysis_id")
+        return v
+
+
 class RefundRequest(BaseModel):
     """Request to refund a payment."""
     analysis_id: str
@@ -419,6 +439,84 @@ async def get_payment_status(analysis_id: str, session_id: str | None = Query(No
         "customer_email": record.get("customer_email"),
         "price_variant": record.get("price_variant"),
     }
+
+
+@router.post("/payments/recover-by-email")
+async def recover_payment_by_email(payload: RecoverByEmailRequest):
+    """
+    Recover payment access for a re-uploaded file when the in-memory state was lost
+    (e.g. after a Render restart) and the original Stripe session pre-dates file_hash metadata.
+
+    The user provides their Stripe checkout email. We search Stripe for a paid session
+    from that email at the correct price and, if found, unlock the current analysis.
+    """
+    logger.info(f"Recovery attempt for analysis {payload.analysis_id}")
+
+    if payload.analysis_id not in eob_analyses:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+
+    # Validate email before hitting Stripe
+    clean_email = sanitize_email(payload.email)
+    if not clean_email or not is_valid_email(clean_email):
+        raise HTTPException(status_code=400, detail="Invalid email address")
+
+    # Already paid — nothing to do
+    record = payment_status_by_analysis.get(payload.analysis_id, {})
+    if record.get("status") == "paid":
+        return {"unlocked": True, "message": "Already unlocked."}
+
+    try:
+        _configure_stripe()
+
+        # Search Stripe for any paid session from this email
+        results = stripe.checkout.Session.search(
+            query=f"customer_email:'{clean_email}' AND payment_status:'paid'",
+            limit=10,
+        )
+
+        if not results.data:
+            logger.info(f"No paid Stripe sessions found for email during recovery")
+            raise HTTPException(
+                status_code=404,
+                detail="No paid sessions found for that email. Make sure you use the email address you entered at checkout."
+            )
+
+        # Find a session with an amount that matches any of our known price tiers
+        valid_amounts = set(EXPECTED_PRICE_CENTS.values())
+        matching_session = None
+        for session in results.data:
+            amount = getattr(session, "amount_total", None)
+            if amount in valid_amounts:
+                matching_session = session
+                break
+
+        if not matching_session:
+            logger.warning(f"Paid sessions found for email but none match expected amounts")
+            raise HTTPException(
+                status_code=404,
+                detail="No matching paid sessions found for that email."
+            )
+
+        meta = getattr(matching_session, "metadata", {}) or {}
+        _mark_paid_and_track(
+            payload.analysis_id,
+            session_id=matching_session.id,
+            amount_total=getattr(matching_session, "amount_total", None),
+            customer_email=clean_email,
+            price_variant=meta.get("price_variant", "control"),
+        )
+
+        logger.info(f"Recovery succeeded for analysis {payload.analysis_id} via email")
+        return {"unlocked": True, "message": "Access restored. Your toolkit is now unlocked."}
+
+    except HTTPException:
+        raise
+    except stripe.error.StripeError as e:
+        logger.error(f"Stripe error during email recovery: {str(e)}")
+        raise HTTPException(status_code=502, detail="Payment service temporarily unavailable. Try again in a moment.")
+    except Exception as e:
+        logger.error(f"Unexpected error during email recovery: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/payments/history/{analysis_id}")
