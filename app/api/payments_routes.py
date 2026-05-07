@@ -468,9 +468,10 @@ async def recover_payment_by_email(payload: RecoverByEmailRequest):
     try:
         _configure_stripe()
 
-        # Search Stripe for any paid session from this email
+        # Search Stripe for any paid session from this email.
+        # Stripe Checkout Session Search uses customer_details.email, not customer_email.
         results = stripe.checkout.Session.search(
-            query=f"customer_email:'{clean_email}' AND payment_status:'paid'",
+            query=f"customer_details.email:'{clean_email}' AND payment_status:'paid'",
             limit=10,
         )
 
@@ -481,21 +482,17 @@ async def recover_payment_by_email(payload: RecoverByEmailRequest):
                 detail="No paid sessions found for that email. Make sure you use the email address you entered at checkout."
             )
 
-        # Find a session with an amount that matches any of our known price tiers
-        valid_amounts = set(EXPECTED_PRICE_CENTS.values())
+        # Any paid session from this Stripe account is valid — we only sell one product.
+        # Prefer sessions with a known price variant in metadata, otherwise take the first.
         matching_session = None
         for session in results.data:
-            amount = getattr(session, "amount_total", None)
-            if amount in valid_amounts:
+            meta = getattr(session, "metadata", {}) or {}
+            if meta.get("price_variant") in ("control", "test") or getattr(session, "amount_total", 0) > 0:
                 matching_session = session
                 break
-
+        # Fallback: just take the first paid session
         if not matching_session:
-            logger.warning(f"Paid sessions found for email but none match expected amounts")
-            raise HTTPException(
-                status_code=404,
-                detail="No matching paid sessions found for that email."
-            )
+            matching_session = results.data[0]
 
         meta = getattr(matching_session, "metadata", {}) or {}
         _mark_paid_and_track(
