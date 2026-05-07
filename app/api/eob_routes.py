@@ -22,6 +22,18 @@ from app.store import (
 
 router = APIRouter()
 
+
+def _extract_customer_email_simple(session_obj) -> str | None:
+    """Extract customer email from a Stripe Session object."""
+    try:
+        details = getattr(session_obj, "customer_details", None)
+        if details:
+            return getattr(details, "email", None) or (details.get("email") if isinstance(details, dict) else None)
+    except Exception:
+        pass
+    return None
+
+
 @router.post("/upload", response_model=schemas.EOBUploadResponse)
 async def upload_eob(
     file: UploadFile = File(...),
@@ -76,7 +88,9 @@ async def upload_eob(
         # Store analysis
         save_analysis(analysis_id, analysis)
 
-        # If the same file was previously paid, carry the payment status forward automatically
+        # If the same file was previously paid, carry the payment status forward automatically.
+        # First check in-memory store (fast path); if missed (e.g. after a Render restart that
+        # wiped the ephemeral disk), fall back to a Stripe Search query so users never pay twice.
         prior_paid_id = get_paid_analysis_id_for_hash(file_hash)
         if prior_paid_id and prior_paid_id != analysis_id:
             prior_record = payment_status_by_analysis.get(prior_paid_id, {})
@@ -91,7 +105,32 @@ async def upload_eob(
             else:
                 initialize_analysis_payment(analysis_id)
         else:
-            initialize_analysis_payment(analysis_id)
+            # In-memory miss — check Stripe directly in case state was lost on restart
+            stripe_paid = False
+            try:
+                import stripe as _stripe
+                import os as _os
+                _stripe.api_key = _os.getenv("STRIPE_SECRET_KEY", "")
+                if _stripe.api_key and file_hash:
+                    results = _stripe.checkout.Session.search(
+                        query=f"metadata['file_hash']:'{file_hash}' AND payment_status:'paid'",
+                        limit=1,
+                    )
+                    if results.data:
+                        prior_session = results.data[0]
+                        prior_meta = getattr(prior_session, "metadata", {}) or {}
+                        mark_paid(
+                            analysis_id,
+                            session_id=prior_session.id,
+                            amount_total=getattr(prior_session, "amount_total", None),
+                            customer_email=_extract_customer_email_simple(prior_session),
+                            price_variant=prior_meta.get("price_variant"),
+                        )
+                        stripe_paid = True
+            except Exception:
+                pass  # Non-fatal; user will see paywall but is not double-charged
+            if not stripe_paid:
+                initialize_analysis_payment(analysis_id)
         
         return schemas.EOBUploadResponse(
             message="EOB file uploaded and analysis started",

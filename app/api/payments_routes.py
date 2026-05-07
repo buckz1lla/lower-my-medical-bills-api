@@ -287,11 +287,13 @@ async def create_checkout_session(payload: CheckoutSessionRequest):
                 metadata={
                     "analysis_id": payload.analysis_id,
                     "price_variant": variant,
+                    "file_hash": getattr(eob_analyses.get(payload.analysis_id), "file_hash", "") or "",
                 },
                 payment_intent_data={
                     "metadata": {
                         "analysis_id": payload.analysis_id,
                         "price_variant": variant,
+                        "file_hash": getattr(eob_analyses.get(payload.analysis_id), "file_hash", "") or "",
                     }
                 },
             )
