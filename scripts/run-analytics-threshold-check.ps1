@@ -51,12 +51,12 @@ if ($views -lt $MinViewsForRateCheck) {
         Write-Host $msg -ForegroundColor Yellow
     }
 } else {
-    if ($viewsToPayment -lt $MinViewsToPaymentPct) {
-        $failures += "views->payment below threshold: $viewsToPayment < $MinViewsToPaymentPct"
-    }
     if ($payments -lt $MinPaymentsForRateCheck) {
-        Write-Host "Low payment volume: payments=$payments (< $MinPaymentsForRateCheck); skipping payment-dependent rate thresholds." -ForegroundColor Yellow
+        Write-Host "Low payment volume: payments=$payments (< $MinPaymentsForRateCheck); skipping all rate thresholds." -ForegroundColor Yellow
     } else {
+        if ($viewsToPayment -lt $MinViewsToPaymentPct) {
+            $failures += "views->payment below threshold: $viewsToPayment < $MinViewsToPaymentPct"
+        }
         if ($paymentToDownload -lt $MinPaymentToDownloadPct) {
             $failures += "payment->download below threshold: $paymentToDownload < $MinPaymentToDownloadPct"
         }
