@@ -5,6 +5,7 @@ param(
     [double]$MinPaymentToDownloadPct = 70.0,
     [double]$MinAffiliateCtrPct = 1.0,
     [int]$MinViewsForRateCheck = 20,
+    [int]$MinPaymentsForRateCheck = 3,
     [switch]$FailOnLowVolume
 )
 
@@ -53,11 +54,15 @@ if ($views -lt $MinViewsForRateCheck) {
     if ($viewsToPayment -lt $MinViewsToPaymentPct) {
         $failures += "views->payment below threshold: $viewsToPayment < $MinViewsToPaymentPct"
     }
-    if ($paymentToDownload -lt $MinPaymentToDownloadPct) {
-        $failures += "payment->download below threshold: $paymentToDownload < $MinPaymentToDownloadPct"
-    }
-    if ($affiliateCtr -lt $MinAffiliateCtrPct) {
-        $failures += "affiliate CTR below threshold: $affiliateCtr < $MinAffiliateCtrPct"
+    if ($payments -lt $MinPaymentsForRateCheck) {
+        Write-Host "Low payment volume: payments=$payments (< $MinPaymentsForRateCheck); skipping payment-dependent rate thresholds." -ForegroundColor Yellow
+    } else {
+        if ($paymentToDownload -lt $MinPaymentToDownloadPct) {
+            $failures += "payment->download below threshold: $paymentToDownload < $MinPaymentToDownloadPct"
+        }
+        if ($affiliateCtr -lt $MinAffiliateCtrPct) {
+            $failures += "affiliate CTR below threshold: $affiliateCtr < $MinAffiliateCtrPct"
+        }
     }
 }
 
