@@ -9,6 +9,13 @@ import re
 from pypdf import PdfReader
 from app.services.rule_engine import evaluate_claims, _get_carc_data
 
+try:
+    import pytesseract
+    from PIL import Image
+    _OCR_AVAILABLE = True
+except ImportError:
+    _OCR_AVAILABLE = False
+
 async def analyze_eob(
     file_name: str,
     content: bytes,
@@ -206,12 +213,29 @@ def _build_claims_from_uploaded_file(
     """Build claims from uploaded file content using best-effort parsing."""
     claims: List[schemas.ClaimGroup] = []
 
-    # Explicit fast-path: OCR/Excel parsing is not implemented yet, so avoid expensive regex on binary payloads.
-    if file_type in {".jpg", ".jpeg", ".png", ".xlsx"}:
+    # Image files — run pytesseract OCR, then feed text into the standard claim parser.
+    if file_type in {".jpg", ".jpeg", ".png"}:
+        text = _extract_image_text_ocr(content)
+        if _looks_like_text(text):
+            claim = _parse_text_claim(text=text, file_name=file_name, analysis_id=analysis_id)
+            if claim is not None:
+                return [claim], {
+                    "analysis_mode": "live",
+                    "parser_source": "ocr_tesseract",
+                    "parser_warning": "Text extracted via OCR. Verify totals against your EOB before acting.",
+                }
         return [_build_placeholder_claim(file_name=file_name, analysis_id=analysis_id)], {
             "analysis_mode": "live",
             "parser_source": "unparsed_placeholder",
-            "parser_warning": "This file type requires OCR/structured parser support. Try CSV for deterministic extraction.",
+            "parser_warning": "OCR could not extract readable claim data from this image. For best results, upload a flat, well-lit photo or a PDF.",
+        }
+
+    # Excel fast-path — not yet implemented.
+    if file_type == ".xlsx":
+        return [_build_placeholder_claim(file_name=file_name, analysis_id=analysis_id)], {
+            "analysis_mode": "live",
+            "parser_source": "unparsed_placeholder",
+            "parser_warning": "Excel files are not yet supported. Try exporting as CSV.",
         }
 
     if file_type == ".pdf" and _looks_like_pdf_binary(content):
@@ -301,6 +325,21 @@ def _extract_pdf_text(content: bytes, max_pages: int = 15) -> str:
             if extracted:
                 chunks.append(extracted)
         return "\n".join(chunks)
+    except Exception:
+        return ""
+
+
+def _extract_image_text_ocr(content: bytes) -> str:
+    """Run pytesseract OCR on an image and return extracted text."""
+    if not _OCR_AVAILABLE:
+        return ""
+    try:
+        img = Image.open(io.BytesIO(content))
+        # Convert to RGB to ensure compatibility with all image modes
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        text = pytesseract.image_to_string(img, config="--psm 6")
+        return text or ""
     except Exception:
         return ""
 
