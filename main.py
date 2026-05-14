@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=True)
 
-from app.api import eob_routes, analytics_routes, payments_routes, admin_routes, email_routes, appeal_routes
+from app.api import eob_routes, analytics_routes, payments_routes, admin_routes, email_routes, appeal_routes, fair_price_routes
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -42,6 +42,7 @@ app.include_router(payments_routes.router, prefix="/api", tags=["Payments"])
 app.include_router(admin_routes.router, prefix="/api", tags=["Owner Auth"])
 app.include_router(email_routes.router, prefix="/api", tags=["Email"])
 app.include_router(appeal_routes.router, prefix="/api", tags=["Appeal Tracker"])
+app.include_router(fair_price_routes.router, prefix="/api", tags=["Fair Price"])
 
 if __name__ == "__main__":
     import uvicorn
