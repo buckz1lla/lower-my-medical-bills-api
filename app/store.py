@@ -1,10 +1,21 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
+import os
 from pathlib import Path
 from typing import Optional
 
 
+# How long a parsed analysis (which contains PHI: provider names, service
+# descriptions, dates, amounts) is retained before it is automatically purged
+# from memory and disk. Bounding retention minimizes the sensitive data we hold.
+# Raw uploaded file bytes are never persisted — only an irreversible SHA-256 hash.
+try:
+    ANALYSIS_RETENTION_HOURS = max(1, int(os.getenv("ANALYSIS_RETENTION_HOURS", "24")))
+except (TypeError, ValueError):
+    ANALYSIS_RETENTION_HOURS = 24
+
 eob_analyses = {}
+analysis_created_at: dict[str, str] = {}  # analysis_id -> ISO timestamp of creation
 payment_status_by_analysis = {}
 checkout_session_to_analysis = {}
 processed_webhook_events = {}  # Track processed webhook IDs for idempotency
@@ -222,7 +233,16 @@ def _save_analysis_state() -> None:
         except Exception:
             pass
     with open(_ANALYSIS_FILE, "w", encoding="utf-8") as f:
-        json.dump({"analyses": serializable, "updated_at": datetime.utcnow().isoformat()}, f, ensure_ascii=True, indent=2)
+        json.dump(
+            {
+                "analyses": serializable,
+                "created_at": analysis_created_at,
+                "updated_at": datetime.utcnow().isoformat(),
+            },
+            f,
+            ensure_ascii=True,
+            indent=2,
+        )
 
 
 def _load_analysis_state() -> None:
@@ -232,9 +252,13 @@ def _load_analysis_state() -> None:
         from app.schemas import EOBAnalysis
         with open(_ANALYSIS_FILE, "r", encoding="utf-8") as f:
             payload = json.load(f)
+        created_map = payload.get("created_at", {})
         for aid, data in payload.get("analyses", {}).items():
             try:
                 eob_analyses[aid] = EOBAnalysis.model_validate(data)
+                # Backfill a creation timestamp for legacy records so they are
+                # still subject to retention purging.
+                analysis_created_at[aid] = created_map.get(aid, datetime.utcnow().isoformat())
             except Exception:
                 pass
     except Exception as e:
@@ -244,9 +268,55 @@ def _load_analysis_state() -> None:
 def save_analysis(analysis_id: str, analysis) -> None:
     """Store an analysis in memory and persist to disk."""
     eob_analyses[analysis_id] = analysis
+    analysis_created_at[analysis_id] = datetime.utcnow().isoformat()
     _save_analysis_state()
+
+
+def delete_analysis(analysis_id: str) -> bool:
+    """Permanently remove a stored analysis and its PHI from memory and disk.
+
+    Payment state (keyed by the irreversible file hash) is intentionally left
+    intact so a paying user is never double-charged if they re-upload later.
+    Returns True if an analysis was removed, False if nothing was found.
+    """
+    removed = eob_analyses.pop(analysis_id, None) is not None
+    analysis_created_at.pop(analysis_id, None)
+    if removed:
+        _save_analysis_state()
+    return removed
+
+
+def purge_expired_analyses(retention_hours: int | None = None) -> int:
+    """Delete analyses older than the retention window. Returns count purged.
+
+    This bounds how long parsed PHI lives on the server. Payment records are
+    not touched, so re-uploading the same file is still recognized as paid.
+    """
+    hours = retention_hours if retention_hours is not None else ANALYSIS_RETENTION_HOURS
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    expired: list[str] = []
+    for aid, created_iso in list(analysis_created_at.items()):
+        try:
+            created = datetime.fromisoformat(created_iso)
+        except (TypeError, ValueError):
+            # Unparseable timestamp — treat as expired to err toward privacy.
+            expired.append(aid)
+            continue
+        if created < cutoff:
+            expired.append(aid)
+
+    for aid in expired:
+        eob_analyses.pop(aid, None)
+        analysis_created_at.pop(aid, None)
+
+    if expired:
+        _save_analysis_state()
+    return len(expired)
 
 
 _load_payment_state()
 _load_outcome_state()
 _load_analysis_state()
+# Purge any analyses that already exceeded the retention window before this
+# process started (e.g. after a restart). Keeps stored PHI within policy.
+purge_expired_analyses()

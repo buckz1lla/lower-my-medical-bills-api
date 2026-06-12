@@ -16,8 +16,11 @@ from app.store import (
     paid_analysis_by_hash,
     get_paid_analysis_id_for_hash,
     save_analysis,
+    delete_analysis,
+    purge_expired_analyses,
     upsert_outcome,
     get_outcomes as store_get_outcomes,
+    ANALYSIS_RETENTION_HOURS,
 )
 
 router = APIRouter()
@@ -46,6 +49,10 @@ async def upload_eob(
     Returns analysis ID for querying results.
     """
     try:
+        # Opportunistically purge analyses past the retention window so stored
+        # PHI stays within policy without needing a separate scheduler.
+        purge_expired_analyses()
+
         # Validate file type
         allowed_extensions = ['.pdf', '.jpg', '.jpeg', '.png', '.csv', '.xlsx']
         file_ext = '.' + file.filename.split('.')[-1].lower()
@@ -153,6 +160,38 @@ async def get_analysis(analysis_id: str):
         raise HTTPException(status_code=404, detail="Analysis not found")
     
     return eob_analyses[analysis_id]
+
+@router.delete("/analysis/{analysis_id}")
+async def delete_analysis_endpoint(analysis_id: str):
+    """Permanently delete a stored analysis and all of its parsed PHI.
+
+    Lets a user wipe their data on demand. Payment records (keyed by an
+    irreversible file hash, never the file contents) are preserved so a paying
+    user is not double-charged if they upload the same file again later.
+    """
+    removed = delete_analysis(analysis_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    return {"deleted": True, "analysis_id": analysis_id}
+
+@router.get("/privacy-policy")
+async def privacy_retention_policy():
+    """Machine-readable summary of how uploaded EOB data is handled.
+
+    Backs the public privacy/trust messaging so the UI can stay in sync with
+    actual server behavior instead of hard-coding claims.
+    """
+    return {
+        "raw_file_retention": "none",
+        "raw_file_note": "Uploaded files are analyzed in memory and never written to disk. Only an irreversible SHA-256 hash is kept to recognize re-uploads.",
+        "parsed_analysis_retention_hours": ANALYSIS_RETENTION_HOURS,
+        "parsed_analysis_note": (
+            f"Parsed results auto-delete {ANALYSIS_RETENTION_HOURS} hours after upload. "
+            "You can also delete your analysis at any time."
+        ),
+        "user_delete_supported": True,
+        "third_party_sharing": "none",
+    }
 
 @router.get("/savings-summary/{analysis_id}")
 async def get_savings_summary(analysis_id: str):
