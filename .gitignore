@@ -8,8 +8,10 @@ __pycache__/
 .env.*
 !.env.example
 
-# Runtime state
+# Runtime state (may contain PII/PHI — never commit)
 data/payment_state.json
+data/analysis_state.json
+data/outcome_state.json
 data/*.jsonl
 analytics/
 tmp-test-eob.csv
